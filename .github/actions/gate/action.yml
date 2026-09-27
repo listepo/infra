@@ -1,0 +1,40 @@
+name: gate
+description: >-
+  Fail unless every listed job result is `success`. Pass `toJSON(needs)`; failure, cancelled
+  and skipped all fail the gate, except jobs named in `skip-ok` (disabled on purpose).
+inputs:
+  needs:
+    description: JSON of the `needs` context, i.e. `$` + `{{ toJSON(needs) }}`.
+    required: true
+  skip-ok:
+    description: Space-separated job ids that may be `skipped` (turned off by an input).
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Require every job to succeed
+      shell: bash
+      env:
+        NEEDS: ${{ inputs.needs }}
+        SKIP_OK: ${{ inputs.skip-ok }}
+      run: |
+        set -euo pipefail
+        fail=0
+        count=0
+        while IFS=$'\t' read -r name result; do
+          count=$((count + 1))
+          echo "$name: $result"
+          if [ "$result" = "success" ]; then continue; fi
+          if [ "$result" = "skipped" ] && [[ " $SKIP_OK " == *" $name "* ]]; then
+            echo "  (skipped on purpose)"
+            continue
+          fi
+          echo "::error title=gate::$name finished with '$result'"
+          fail=1
+        done < <(jq -r 'to_entries[] | [.key, .value.result] | @tsv' <<<"$NEEDS")
+        if [ "$count" -eq 0 ]; then
+          echo "::error title=gate::no jobs to gate on (empty needs)"
+          exit 1
+        fi
+        exit "$fail"

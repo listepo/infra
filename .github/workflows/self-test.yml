@@ -2,7 +2,9 @@ name: self-test
 
 # Runs ci-rust.yml against tests/fixtures/rust-crate through both toolchain paths: the
 # default shared matrix with Rust from mise.toml, and a one-entry matrix with an exact
-# rust-version. A change to the reusable workflow is exercised before any caller pins it.
+# rust-version (plus the MSRV job). `pipeline` runs the gated pipeline (ci-rust, CodeQL,
+# Semgrep, Snyk) on this repository. A change to a reusable workflow is exercised before any
+# caller pins it.
 on:
   pull_request:
   workflow_dispatch:
@@ -26,5 +28,21 @@ jobs:
     uses: ./.github/workflows/ci-rust.yml
     with:
       rust-version: "1.98.1"
+      msrv: "1.85"
       working-directory: tests/fixtures/rust-crate
       matrix: '[{"os": "ubuntu-latest", "target": "x86_64-unknown-linux-gnu"}]'
+
+  pipeline:
+    name: pipeline
+    uses: ./.github/workflows/pipeline.yml
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    with:
+      rust: true
+      rust-working-directory: tests/fixtures/rust-crate
+      rust-matrix: '[{"os": "ubuntu-latest", "target": "x86_64-unknown-linux-gnu"}]'
+      codeql-languages: '["actions"]'
+    secrets:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}

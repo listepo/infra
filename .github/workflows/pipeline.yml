@@ -1,0 +1,196 @@
+name: pipeline
+
+# Reusable gated pipeline: Rust CI (optional), CodeQL, Semgrep and Snyk run in parallel as
+# reusable workflows of this repository; `gate` passes only when every enabled job finished
+# with `success` (failure, cancelled or skipped fail it). Callers make release/deploy jobs
+# `needs:` this job. Draft pull requests skip every job, the gate included.
+#
+# Sibling workflows are referenced with `$/` (self-repository syntax), so they resolve to this
+# repository at the exact commit the caller pinned.
+#
+# Caller job permissions: contents: read, security-events: write, actions: read (plus whatever
+# the Rust CI needs; ci-rust.yml itself only reads).
+# Secrets: SNYK_TOKEN (optional). Pass it explicitly; `secrets: inherit` also works.
+on:
+  workflow_call:
+    inputs:
+      rust:
+        description: Run ci-rust.yml. Off for repositories whose CI is a local workflow.
+        type: boolean
+        required: false
+        default: false
+      rust-working-directory:
+        description: ci-rust.yml `working-directory`.
+        type: string
+        required: false
+        default: "."
+      rust-matrix:
+        description: ci-rust.yml `matrix` (JSON). Empty uses ci-rust.yml's shared matrix.
+        type: string
+        required: false
+        default: ""
+      rust-setup-command:
+        description: ci-rust.yml `setup-command`.
+        type: string
+        required: false
+        default: ""
+      rust-test-command:
+        description: ci-rust.yml `test-command`.
+        type: string
+        required: false
+        default: cargo test --all-targets $FEATURE_ARGS
+      rust-feature-args:
+        description: ci-rust.yml `feature-args`.
+        type: string
+        required: false
+        default: --all-features
+      rust-msrv:
+        description: ci-rust.yml `msrv` (empty skips the MSRV job).
+        type: string
+        required: false
+        default: ""
+      codeql:
+        description: Run codeql.yml.
+        type: boolean
+        required: false
+        default: true
+      codeql-languages:
+        description: codeql.yml `languages` (JSON array).
+        type: string
+        required: false
+        default: '["actions"]'
+      codeql-build-mode:
+        description: codeql.yml `build-mode`.
+        type: string
+        required: false
+        default: none
+      codeql-queries:
+        description: codeql.yml `queries`.
+        type: string
+        required: false
+        default: security-and-quality
+      semgrep:
+        description: Run semgrep.yml.
+        type: boolean
+        required: false
+        default: true
+      semgrep-config:
+        description: semgrep.yml `config`.
+        type: string
+        required: false
+        default: p/default
+      snyk:
+        description: Run snyk.yml (skips itself without SNYK_TOKEN).
+        type: boolean
+        required: false
+        default: true
+      upload-sarif:
+        description: >-
+          Upload CodeQL/Semgrep/Snyk results to code scanning. false for private repositories
+          without GitHub Code Security (SARIF kept as artifacts).
+        type: boolean
+        required: false
+        default: true
+    secrets:
+      SNYK_TOKEN:
+        required: false
+    outputs:
+      result:
+        description: "`success` when the gate passed."
+        value: ${{ jobs.gate.outputs.result }}
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    if: >-
+      inputs.rust
+      && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    uses: $/.github/workflows/ci-rust.yml
+    with:
+      working-directory: ${{ inputs.rust-working-directory }}
+      matrix: ${{ inputs.rust-matrix }}
+      setup-command: ${{ inputs.rust-setup-command }}
+      test-command: ${{ inputs.rust-test-command }}
+      feature-args: ${{ inputs.rust-feature-args }}
+      msrv: ${{ inputs.rust-msrv }}
+
+  codeql:
+    if: >-
+      inputs.codeql
+      && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    uses: $/.github/workflows/codeql.yml
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    with:
+      languages: ${{ inputs.codeql-languages }}
+      build-mode: ${{ inputs.codeql-build-mode }}
+      queries: ${{ inputs.codeql-queries }}
+      upload: ${{ inputs.upload-sarif }}
+
+  semgrep:
+    if: >-
+      inputs.semgrep
+      && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    uses: $/.github/workflows/semgrep.yml
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    with:
+      config: ${{ inputs.semgrep-config }}
+      upload: ${{ inputs.upload-sarif }}
+
+  snyk:
+    if: >-
+      inputs.snyk
+      && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    uses: $/.github/workflows/snyk.yml
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    with:
+      upload: ${{ inputs.upload-sarif }}
+    secrets:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+  gate:
+    needs: [rust, codeql, semgrep, snyk]
+    # !cancelled(): report failed, cancelled or skipped needs, but do not hold a cancelled run.
+    # Skipped on draft PRs like every other job, so a draft never leaves a green `gate` behind.
+    if: >-
+      !cancelled()
+      && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    runs-on: ubuntu-latest
+    outputs:
+      result: ${{ steps.done.outputs.result }}
+    steps:
+      # A job turned off by its input is `skipped` on purpose; any other non-success fails.
+      - name: Jobs turned off by input
+        id: off
+        env:
+          RUST: ${{ inputs.rust }}
+          CODEQL: ${{ inputs.codeql }}
+          SEMGREP: ${{ inputs.semgrep }}
+          SNYK: ${{ inputs.snyk }}
+        run: |
+          off=""
+          [ "$RUST" = "true" ] || off="$off rust"
+          [ "$CODEQL" = "true" ] || off="$off codeql"
+          [ "$SEMGREP" = "true" ] || off="$off semgrep"
+          [ "$SNYK" = "true" ] || off="$off snyk"
+          if [ "$off" = " rust codeql semgrep snyk" ]; then
+            echo "::error title=gate::every job is turned off; nothing to gate on"
+            exit 1
+          fi
+          echo "skip-ok=$off" >> "$GITHUB_OUTPUT"
+      - uses: $/.github/actions/gate
+        with:
+          needs: ${{ toJSON(needs) }}
+          skip-ok: ${{ steps.off.outputs.skip-ok }}
+      - id: done
+        run: echo "result=success" >> "$GITHUB_OUTPUT"
