@@ -90,14 +90,16 @@ every job fails if `rustc --version` is not the pinned version.
 | `matrix` | `""` (shared five-target matrix) | JSON `[{"os", "target", "test"?}]` |
 | `rust-version` | `""` | exact toolchain via rustup instead of mise |
 | `working-directory` | `.` | Cargo workspace |
-| `feature-args` | `--all-features` | used by clippy, check, test, build, MSRV |
+| `package-args` | `--workspace` | packages for every cargo command (`-p x`; `""` = root only) |
+| `feature-args` | `--all-features` | used by clippy, check, test, doctests, build, MSRV |
 | `clippy-args` | `""` | extra args before `--` for clippy and check |
 | `tools` | `""` | taiki-e/install-action tools (e.g. `nextest`) |
 | `setup-command` | `""` | bash before clippy (system packages) |
-| `test-command` | `cargo test --all-targets $FEATURE_ARGS` | native targets only |
-| `build-command` | `cargo build --all-targets $FEATURE_ARGS --target "$TARGET"` | cross targets |
+| `test-command` | `cargo test $PACKAGE_ARGS --all-targets $FEATURE_ARGS` | native targets only |
+| `doc-tests` | `true` | `cargo test $PACKAGE_ARGS --doc $FEATURE_ARGS`; no lib: skipped |
+| `build-command` | `cargo build $PACKAGE_ARGS --all-targets $FEATURE_ARGS --target "$TARGET"` | |
 | `msrv` | `""` | e.g. `1.85`; adds an `msrv` job |
-| `msrv-command` | `cargo check --workspace --all-targets $FEATURE_ARGS` | |
+| `msrv-command` | `cargo check $PACKAGE_ARGS --all-targets $FEATURE_ARGS` | |
 | `fmt-runs-on`, `mise-install-args`, `cache-all-refs`, `timeout-minutes` | | |
 
 ## codeql.yml / semgrep.yml / snyk.yml
@@ -111,11 +113,22 @@ every job fails if `rustc --version` is not the pinned version.
 
 ## pipeline.yml
 
-Inputs: `rust` (false), `rust-working-directory`, `rust-matrix`, `rust-setup-command`,
-`rust-test-command`, `rust-feature-args`, `rust-msrv`, `codeql` (true), `codeql-languages`,
-`codeql-build-mode`, `codeql-queries`, `semgrep` (true), `semgrep-config`, `snyk` (true),
-`upload-sarif` (true). Output: `result` (`success`). Draft PRs skip every job, including the
-gate, so a draft never shows a green `gate`.
+Inputs:
+
+- `rust` (false) runs ci-rust.yml. Every ci-rust.yml input is passed through as `rust-<name>`
+  with the same default: `rust-matrix`, `rust-rust-version`, `rust-fmt-runs-on`,
+  `rust-working-directory`, `rust-mise-install-args`, `rust-clippy-args`, `rust-tools`,
+  `rust-setup-command`, `rust-test-command`, `rust-doc-tests`, `rust-build-command`,
+  `rust-package-args`, `rust-feature-args`, `rust-msrv`, `rust-msrv-command`,
+  `rust-timeout-minutes`, `rust-cache-all-refs`.
+- `codeql` (true), `codeql-languages`, `codeql-build-mode`, `codeql-build-command`,
+  `codeql-queries`, `codeql-config-file`, `codeql-runs-on`.
+- `semgrep` (true), `semgrep-config`, `semgrep-extra-args`, `semgrep-fail-on-findings`.
+- `snyk` (true), `snyk-args`, `snyk-monitor`.
+- `upload-sarif` (true).
+
+Output: `result` (`success`). Draft PRs skip every job, including the gate, so a draft never
+shows a green `gate`.
 
 Copy-paste caller (`.github/workflows/pipeline.yml`):
 
