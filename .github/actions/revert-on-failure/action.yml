@@ -1,0 +1,153 @@
+name: revert-on-failure
+description: >-
+  Revert the commits of a push whose CI failed, push the revert to the branch, and optionally
+  open a draft PR that re-applies the work. Unifies the revert-on-failure jobs of rtok,
+  bindsmith, cox, runa, slint_dart and stator.
+# Call it from a job that `needs:` the CI jobs, e.g.
+#   if: >-
+#     always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+#     && contains(join(needs.*.result, ','), 'failure')
+#   permissions: {contents: write, pull-requests: write}
+# The action checks out the repository itself (full history).
+inputs:
+  before:
+    description: Commit before the push (github.event.before).
+    required: false
+    default: ${{ github.event.before }}
+  after:
+    description: Last commit of the push (github.sha).
+    required: false
+    default: ${{ github.sha }}
+  branch:
+    description: Branch the revert is pushed to.
+    required: false
+    default: ${{ github.ref_name }}
+  reapply-pr:
+    description: Open a draft PR `revert-<branch>` that re-applies the reverted work.
+    required: false
+    default: "true"
+  skip-workflow-changes:
+    description: >-
+      Skip when the push touched .github/ (GITHUB_TOKEN cannot push workflow files without the
+      `workflows` permission). Leave it on.
+    required: false
+    default: "true"
+  dry-run:
+    description: Make the revert commit locally but push nothing and open no PR.
+    required: false
+    default: "false"
+  token:
+    description: Token for checkout, push and the PR.
+    required: false
+    default: ${{ github.token }}
+outputs:
+  reverted:
+    description: "`true` when a revert commit was made (and pushed unless dry-run)."
+    value: ${{ steps.revert.outputs.reverted }}
+  pr-url:
+    description: URL of the re-apply PR, if one was opened.
+    value: ${{ steps.reapply.outputs.url }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        fetch-depth: 0
+        token: ${{ inputs.token }}
+
+    - name: Revert commits from this push
+      id: revert
+      shell: bash
+      env:
+        BEFORE: ${{ inputs.before }}
+        AFTER: ${{ inputs.after }}
+        BRANCH: ${{ inputs.branch }}
+        SKIP_WORKFLOWS: ${{ inputs.skip-workflow-changes }}
+        DRY_RUN: ${{ inputs.dry-run }}
+      run: |
+        set -euo pipefail
+        echo "reverted=false" >> "$GITHUB_OUTPUT"
+        if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+          echo "No parent (new branch); skip revert"
+          exit 0
+        fi
+        if ! git cat-file -e "$BEFORE" 2>/dev/null; then
+          echo "Base $BEFORE not present locally (force push?); skip revert"
+          exit 0
+        fi
+        subject=$(git log -1 --format=%s "$AFTER")
+        author=$(git log -1 --format=%an "$AFTER")
+        case "$subject" in
+          "ci: auto-revert"*) echo "Already an auto-revert; skip"; exit 0 ;;
+        esac
+        if [ "$author" = "github-actions[bot]" ]; then
+          echo "Last commit is from actions bot; skip"
+          exit 0
+        fi
+        if [ "$SKIP_WORKFLOWS" = "true" ] \
+          && git diff --name-only "$BEFORE" "$AFTER" -- .github/ | grep -q .; then
+          echo "Push touched .github/; auto-revert needs 'workflows' permission; skipping"
+          exit 0
+        fi
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        parent_count=$(git rev-list --parents -n 1 "$AFTER" | awk '{print NF}')
+        short=$(git rev-parse --short "$AFTER")
+        if [ "$parent_count" -gt 2 ]; then
+          git revert --no-edit -m 1 "$AFTER"
+        else
+          git revert --no-commit "$BEFORE".."$AFTER"
+          if git diff --cached --quiet; then
+            echo "Nothing to revert"
+            exit 0
+          fi
+          git commit -m "ci: auto-revert $short — $BRANCH CI failed"
+        fi
+        git log -1 --stat
+        if [ "$DRY_RUN" = "true" ]; then
+          echo "dry run: not pushing the revert to $BRANCH"
+        else
+          git push origin "HEAD:$BRANCH"
+        fi
+        echo "reverted=true" >> "$GITHUB_OUTPUT"
+
+    # Draft because CI skips drafts and this tree is known-red. Needs the repository setting
+    # "Allow GitHub Actions to create and approve pull requests".
+    - name: Open a PR that re-applies the reverted work
+      id: reapply
+      if: steps.revert.outputs.reverted == 'true' && inputs.reapply-pr == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        AFTER: ${{ inputs.after }}
+        BRANCH: ${{ inputs.branch }}
+        DRY_RUN: ${{ inputs.dry-run }}
+      run: |
+        set -euo pipefail
+        short=$(git rev-parse --short "$AFTER")
+        # Merged PR -> its head branch and title; direct push -> short sha and commit subject.
+        pr=$(gh api "repos/$GITHUB_REPOSITORY/commits/$AFTER/pulls" \
+          --jq '[.[] | select(.merged_at != null)][0] // {}' 2>/dev/null || echo '{}')
+        name=$(jq -r '.head.ref // empty' <<<"$pr")
+        title=$(jq -r '.title // empty' <<<"$pr")
+        title="[Revert] ${title:-$(git log -1 --format=%s "$AFTER")}"
+        branch="revert-${name:-$short}"
+        if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+          branch="$branch-$short"
+        fi
+        git checkout -b "$branch"
+        git revert --no-commit HEAD
+        git commit --author="$(git log -1 --format='%an <%ae>' "$AFTER")" \
+          -m "Reapply $short — reverted after $BRANCH CI failed"
+        if [ "$DRY_RUN" = "true" ]; then
+          echo "dry run: would push $branch and open a draft PR '$title'"
+          exit 0
+        fi
+        git push origin "$branch"
+        run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+        body="CI failed on $BRANCH at $AFTER ($run_url), so the push was auto-reverted."
+        body+=" This branch re-applies it on top of $BRANCH: push the fix here, mark the PR"
+        body+=" ready for review, merge when CI is green."
+        url=$(gh pr create --draft --base "$BRANCH" --head "$branch" --title "$title" \
+          --body "$body")
+        echo "url=$url" >> "$GITHUB_OUTPUT"
