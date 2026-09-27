@@ -318,12 +318,23 @@ jobs:
           set -euo pipefail
           if command -v mise >/dev/null && v="$(mise current rust 2>/dev/null)" && [ -n "$v" ]
           then
-            echo "RUSTUP_TOOLCHAIN=$v" >> "$GITHUB_ENV"
+            delim="$( (command -v uuidgen >/dev/null && uuidgen) || echo "EOF_$(date +%s%N)_$$" )"
+            {
+              echo "RUSTUP_TOOLCHAIN<<$delim"
+              echo "$v"
+              echo "$delim"
+            } >> "$GITHUB_ENV"
             export RUSTUP_TOOLCHAIN="$v"
           fi
           if command -v rustup >/dev/null; then rustup target add "$TARGET"; fi
           host="$(rustc -vV 2>/dev/null | sed -n 's/^host: //p' || true)"
-          echo "NATIVE=$([ "$host" = "$TARGET" ] && echo true || echo false)" >> "$GITHUB_ENV"
+          native="$([ "$host" = "$TARGET" ] && echo true || echo false)"
+          delim="$( (command -v uuidgen >/dev/null && uuidgen) || echo "EOF_$(date +%s%N)_$$" )"
+          {
+            echo "NATIVE<<$delim"
+            echo "$native"
+            echo "$delim"
+          } >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ${{ inputs.working-directory }} -> target
