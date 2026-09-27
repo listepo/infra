@@ -3,8 +3,10 @@ name: self-test
 # Runs ci-rust.yml against tests/fixtures/rust-crate through both toolchain paths: the
 # default shared matrix with Rust from mise.toml, and a one-entry matrix with an exact
 # rust-version (plus the MSRV job). `pipeline` runs the gated pipeline (ci-rust, CodeQL,
-# Semgrep, Snyk) on this repository. A change to a reusable workflow is exercised before any
-# caller pins it.
+# Semgrep, Snyk) on this repository. The extras run their safe paths: sonarcloud without a
+# token (skips), dependabot-automerge on a non-Dependabot PR (every job skips),
+# revert-on-failure as a dry run of this PR's commits, macos-sign without secrets (skips).
+# A change to a reusable workflow or action is exercised before any caller pins it.
 on:
   pull_request:
   workflow_dispatch:
@@ -46,3 +48,66 @@ jobs:
       codeql-languages: '["actions"]'
     secrets:
       SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+  sonarcloud:
+    name: sonarcloud
+    uses: ./.github/workflows/sonarcloud.yml
+    permissions:
+      contents: read
+      pull-requests: read
+    with:
+      rust: true
+      project-base-dir: tests/fixtures/rust-crate
+    secrets:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  dependabot-automerge:
+    name: dependabot-automerge
+    uses: ./.github/workflows/dependabot-automerge.yml
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
+    with:
+      ci-result: success
+      wait-workflow: self-test.yml
+
+  revert-on-failure:
+    name: revert-on-failure (dry run)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: revert
+        uses: ./.github/actions/revert-on-failure
+        with:
+          before: ${{ github.event.pull_request.base.sha || github.event.before }}
+          after: ${{ github.event.pull_request.head.sha || github.sha }}
+          branch: ${{ github.head_ref || github.ref_name }}
+          skip-workflow-changes: "false"
+          dry-run: "true"
+      - name: A revert commit was made
+        env:
+          REVERTED: ${{ steps.revert.outputs.reverted }}
+        run: |
+          echo "reverted=$REVERTED"
+          [ "$REVERTED" = "true" ] || [ "$GITHUB_EVENT_NAME" != "pull_request" ]
+
+  macos-sign:
+    name: macos-sign (no secrets)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: cp /bin/echo "$RUNNER_TEMP/echo-copy"
+      - id: sign
+        uses: ./.github/actions/macos-sign
+        with:
+          paths: ${{ runner.temp }}/echo-copy
+      - name: Skipped without secrets
+        env:
+          SIGNED: ${{ steps.sign.outputs.signed }}
+        run: '[ "$SIGNED" = "false" ]'
+
