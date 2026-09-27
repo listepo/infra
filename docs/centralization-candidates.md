@@ -93,27 +93,27 @@ ketch-registry and listepo have no `.github/` at all. There is no `listepo/.gith
 
 - Where: rtok, dunnage, ketch (`build-setup.yml` + dist), cox
 - Similarity: build-setup.yml dunnage vs rtok 32 lines, ketch 18
-- Recommendation: composite action `macos-sign` later; `release.yml` has it inline now
+- Recommendation: composite action `macos-sign` (done); `release.yml` uses it
 
 ### Dependabot auto-merge workflow
 
 - Where: rtok, ketch, cox (`dependabot.yml` workflow)
 - Similarity: 16-33 lines apart (ci job permissions, pipeline wait)
-- Recommendation: reusable `dependabot-automerge.yml` (next PR)
+- Recommendation: reusable `dependabot-automerge.yml` (done)
 
 ### revert-on-failure job
 
 - Where: rtok, bindsmith, cox, runa, slint_dart, stator
 - Similarity: two generations: stator/runa/slint_dart/bindsmith/cox differ 6-15 lines (mostly
   `needs:`); rtok adds the re-apply PR (34-39 lines more)
-- Recommendation: composite action `revert-on-failure` (next PR)
+- Recommendation: composite action `revert-on-failure` (done)
 
 ### SonarCloud
 
 - Where: rtok, ketch, cox, runa, crates-packages, slint_dart, stator
 - Similarity: ketch/cox/runa/crates-packages 8-12 lines apart (Rust setup, llvm-cov args);
   slint_dart/stator 23-63
-- Recommendation: reusable `sonarcloud-rust.yml` with `coverage-command` input (next PR)
+- Recommendation: reusable `sonarcloud.yml` (done; public repositories only)
 
 ### sync-docs
 
