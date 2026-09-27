@@ -17,7 +17,8 @@ name: release
 # Caller job permissions: contents: write (tag + Release), checks: read, actions: read.
 # Secrets (all optional; a missing one skips its step with a notice, except where an input
 # explicitly asks for it): MACOS_CERTIFICATE (base64 .p12 Developer ID Application),
-# MACOS_CERTIFICATE_PWD, APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD (notarization),
+# MACOS_CERTIFICATE_PWD; notarization with APPSTORE_CONNECT_KEY (+ _KEY_ID, _ISSUER_ID) or
+# APPLE_ID + APPLE_TEAM_ID + APPLE_APP_PASSWORD (via .github/actions/macos-sign),
 # CARGO_REGISTRY_TOKEN (publish-crates), PUBLISH_TOKEN (exported to publish-command).
 on:
   workflow_call:
@@ -162,6 +163,12 @@ on:
       APPLE_TEAM_ID:
         required: false
       APPLE_APP_PASSWORD:
+        required: false
+      APPSTORE_CONNECT_KEY:
+        required: false
+      APPSTORE_CONNECT_KEY_ID:
+        required: false
+      APPSTORE_CONNECT_ISSUER_ID:
         required: false
       CARGO_REGISTRY_TOKEN:
         required: false
@@ -343,64 +350,31 @@ jobs:
           for b in $BINS; do cp "$src/$b$ext" "$out/"; done
           echo "BIN_DIR=$out" >> "$GITHUB_ENV"
           ls -l "$out"
-      - name: Codesign (macOS)
+      - name: Files to sign
         if: runner.os == 'macOS' && inputs.macos-sign
-        env:
-          CERT: ${{ secrets.MACOS_CERTIFICATE }}
-          CERT_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
         run: |
-          set -euo pipefail
-          if [ -z "$CERT" ] || [ -z "$CERT_PWD" ]; then
-            echo "::notice title=codesign skipped::MACOS_CERTIFICATE(_PWD) not set"
-            exit 0
-          fi
-          keychain="$RUNNER_TEMP/release.keychain-db"
-          kpwd="$(openssl rand -hex 16)"
-          echo "$CERT" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-          security create-keychain -p "$kpwd" "$keychain"
-          security set-keychain-settings -lut 21600 "$keychain"
-          security unlock-keychain -p "$kpwd" "$keychain"
-          security import "$RUNNER_TEMP/cert.p12" -P "$CERT_PWD" -f pkcs12 -k "$keychain" \
-            -T /usr/bin/codesign
-          rm -f "$RUNNER_TEMP/cert.p12"
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kpwd" \
-            "$keychain" >/dev/null
-          existing=()
-          while IFS= read -r k; do existing+=("$(xargs <<<"$k")"); done \
-            < <(security list-keychains -d user)
-          security list-keychains -d user -s "$keychain" "${existing[@]}"
-          identity="$(security find-identity -v -p codesigning "$keychain" \
-            | sed -nE 's/^ *[0-9]+\) ([0-9A-F]{40}) "Developer ID Application:.*/\1/p')"
-          if [ "$(printf '%s\n' "$identity" | grep -c .)" -ne 1 ]; then
-            echo "expected exactly one Developer ID Application identity" >&2
-            exit 1
-          fi
-          for f in "$BIN_DIR"/*; do
-            codesign --force --options runtime --timestamp --sign "$identity" "$f"
-            codesign --verify --strict --verbose=2 "$f"
-          done
-          echo "SIGNED=true" >> "$GITHUB_ENV"
-      - name: Notarize (macOS)
-        if: runner.os == 'macOS' && inputs.macos-sign && env.SIGNED == 'true'
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-          REQUIRE: ${{ inputs.require-macos-sign }}
-        run: |
-          set -euo pipefail
-          if [ -z "$APPLE_ID" ] || [ -z "$APPLE_TEAM_ID" ] || [ -z "$APPLE_APP_PASSWORD" ]; then
-            if [ "$REQUIRE" = "true" ]; then
-              echo "::error::notarization secrets (APPLE_ID, APPLE_TEAM_ID, ...) not set"
-              exit 1
-            fi
-            echo "::notice title=notarization skipped::APPLE_ID/APPLE_TEAM_ID/... not set"
-            exit 0
-          fi
-          # Bare binaries cannot be stapled; notarization is recorded online for Gatekeeper.
-          (cd "$BIN_DIR" && zip -q "$RUNNER_TEMP/notarize.zip" ./*)
-          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" --apple-id "$APPLE_ID" \
-            --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+          {
+            echo "SIGN_PATHS<<EOF"
+            find "$BIN_DIR" -type f
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+      # Codesign (hardened runtime) + notarize; skips with a notice when the secrets are absent
+      # unless require-macos-sign. `$/` resolves to this repository at the caller's pinned SHA.
+      - name: Codesign and notarize (macOS)
+        if: runner.os == 'macOS' && inputs.macos-sign
+        uses: $/.github/actions/macos-sign
+        with:
+          mode: sign
+          paths: ${{ env.SIGN_PATHS }}
+          certificate: ${{ secrets.MACOS_CERTIFICATE }}
+          certificate-password: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          api-key: ${{ secrets.APPSTORE_CONNECT_KEY }}
+          api-key-id: ${{ secrets.APPSTORE_CONNECT_KEY_ID }}
+          api-issuer: ${{ secrets.APPSTORE_CONNECT_ISSUER_ID }}
+          apple-id: ${{ secrets.APPLE_ID }}
+          team-id: ${{ secrets.APPLE_TEAM_ID }}
+          app-password: ${{ secrets.APPLE_APP_PASSWORD }}
+          require: ${{ inputs.require-macos-sign }}
       - name: Smoke test
         if: env.NATIVE == 'true' && inputs.smoke-command != '' && matrix.smoke != false
         env:
