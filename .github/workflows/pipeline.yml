@@ -296,7 +296,7 @@ jobs:
             exit 1
           fi
           echo "skip-ok=$off" >> "$GITHUB_OUTPUT"
-      - uses: $/.github/actions/gate
+      - uses: $/.github/actions/gate # nosemgrep: github-actions-mutable-action-tag
         with:
           needs: ${{ toJSON(needs) }}
           skip-ok: ${{ steps.off.outputs.skip-ok }}

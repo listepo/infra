@@ -313,28 +313,26 @@ jobs:
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
           working_directory: ${{ inputs.working-directory }}
-      - name: Add the target
+      # TARGET comes from the build-matrix input, so it never reaches $GITHUB_ENV: the pin is
+      # set in a step that does not read it, and "native" is a literal step output.
+      - name: Use the mise Rust pin
         run: |
           set -euo pipefail
           if command -v mise >/dev/null && v="$(mise current rust 2>/dev/null)" && [ -n "$v" ]
           then
-            delim="$( (command -v uuidgen >/dev/null && uuidgen) || echo "EOF_$(date +%s%N)_$$" )"
-            {
-              echo "RUSTUP_TOOLCHAIN<<$delim"
-              echo "$v"
-              echo "$delim"
-            } >> "$GITHUB_ENV"
-            export RUSTUP_TOOLCHAIN="$v"
+            echo "RUSTUP_TOOLCHAIN=$v" >> "$GITHUB_ENV"
           fi
+      - name: Add the target
+        id: target
+        run: |
+          set -euo pipefail
           if command -v rustup >/dev/null; then rustup target add "$TARGET"; fi
           host="$(rustc -vV 2>/dev/null | sed -n 's/^host: //p' || true)"
-          native="$([ "$host" = "$TARGET" ] && echo true || echo false)"
-          delim="$( (command -v uuidgen >/dev/null && uuidgen) || echo "EOF_$(date +%s%N)_$$" )"
-          {
-            echo "NATIVE<<$delim"
-            echo "$native"
-            echo "$delim"
-          } >> "$GITHUB_ENV"
+          if [ "$host" = "$TARGET" ]; then
+            echo "native=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "native=false" >> "$GITHUB_OUTPUT"
+          fi
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ${{ inputs.working-directory }} -> target
@@ -373,7 +371,7 @@ jobs:
       # unless require-macos-sign. `$/` resolves to this repository at the caller's pinned SHA.
       - name: Codesign and notarize (macOS)
         if: runner.os == 'macOS' && inputs.macos-sign
-        uses: $/.github/actions/macos-sign
+        uses: $/.github/actions/macos-sign # nosemgrep: github-actions-mutable-action-tag
         with:
           mode: sign
           paths: ${{ env.SIGN_PATHS }}
@@ -387,7 +385,7 @@ jobs:
           app-password: ${{ secrets.APPLE_APP_PASSWORD }}
           require: ${{ inputs.require-macos-sign }}
       - name: Smoke test
-        if: env.NATIVE == 'true' && inputs.smoke-command != '' && matrix.smoke != false
+        if: steps.target.outputs.native == 'true' && inputs.smoke-command != '' && matrix.smoke != false
         env:
           SMOKE_COMMAND: ${{ inputs.smoke-command }}
         run: eval "$SMOKE_COMMAND"
