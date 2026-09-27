@@ -1,0 +1,7 @@
+# Binary-only workspace member: covered by --workspace, and has no library target, so the
+# doctest step must skip it gracefully when it is selected alone.
+[package]
+name = "ci-rust-fixture-cli"
+version = "0.0.0"
+edition = "2024"
+publish = false

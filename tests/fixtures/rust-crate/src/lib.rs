@@ -1,6 +1,10 @@
 //! Fixture for `.github/workflows/self-test.yml`.
 
 /// Adds two numbers.
+///
+/// ```
+/// assert_eq!(ci_rust_fixture::add(1, 2), 3);
+/// ```
 pub fn add(a: u32, b: u32) -> u32 {
     a + b
 }

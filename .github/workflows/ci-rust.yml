@@ -4,9 +4,9 @@ name: ci-rust
 #
 # - `fmt`: cargo fmt --check, once.
 # - `rust`: one job per entry of the shared target matrix (`SHARED_MATRIX` below, or the
-#   `matrix` input): clippy (--all-targets + `feature-args`), check, then the tests where the
-#   runner can run the target natively, or a build of every target where it cannot (cross
-#   targets).
+#   `matrix` input): clippy and check (`package-args` = --workspace by default, --all-targets,
+#   `feature-args`), then the tests and doctests where the runner can run the target natively,
+#   or a build of every target where it cannot (cross targets).
 # - `msrv`: `msrv-command` with the `msrv` toolchain, when `msrv` is set.
 #
 # The Rust toolchain comes from the caller's mise.toml (listepo convention: mise.toml is
@@ -71,17 +71,33 @@ on:
       test-command:
         description: >-
           Bash that runs the tests on entries the runner can execute natively. Empty skips
-          the tests. FEATURE_ARGS is set.
+          the tests. PACKAGE_ARGS and FEATURE_ARGS are set. `--all-targets` does not run
+          doctests; the `doc-tests` step does.
         type: string
         required: false
-        default: cargo test --all-targets $FEATURE_ARGS
+        default: cargo test $PACKAGE_ARGS --all-targets $FEATURE_ARGS
+      doc-tests:
+        description: >-
+          Also run `cargo test $PACKAGE_ARGS --doc $FEATURE_ARGS` where the tests run. A
+          workspace without any library target is skipped with a notice.
+        type: boolean
+        required: false
+        default: true
       build-command:
         description: >-
-          Bash that builds a cross target the runner cannot execute. TARGET and FEATURE_ARGS
-          are set.
+          Bash that builds a cross target the runner cannot execute. TARGET, PACKAGE_ARGS and
+          FEATURE_ARGS are set.
         type: string
         required: false
-        default: cargo build --all-targets $FEATURE_ARGS --target "$TARGET"
+        default: cargo build $PACKAGE_ARGS --all-targets $FEATURE_ARGS --target "$TARGET"
+      package-args:
+        description: >-
+          Package selection for clippy, check, the tests and the MSRV check. Default
+          --workspace covers every member, also when the root is a package. Use e.g.
+          "-p mycrate", or "" for Cargo's default (the root package only).
+        type: string
+        required: false
+        default: --workspace
       feature-args:
         description: >-
           Cargo feature flags for clippy, check and the MSRV check, e.g. "--all-features" or
@@ -97,10 +113,10 @@ on:
         required: false
         default: ""
       msrv-command:
-        description: Bash run by the `msrv` job. FEATURE_ARGS is set.
+        description: Bash run by the `msrv` job. PACKAGE_ARGS and FEATURE_ARGS are set.
         type: string
         required: false
-        default: cargo check --workspace --all-targets $FEATURE_ARGS
+        default: cargo check $PACKAGE_ARGS --all-targets $FEATURE_ARGS
       timeout-minutes:
         description: Timeout of each job.
         type: number
@@ -119,6 +135,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  PACKAGE_ARGS: ${{ inputs.package-args }}
+  FEATURE_ARGS: ${{ inputs.feature-args }}
   SHARED_MATRIX: >-
     [
     {"os": "ubuntu-latest", "target": "x86_64-unknown-linux-gnu"},
@@ -272,7 +290,8 @@ jobs:
         run: |
           # CLIPPY_ARGS and TARGET_ARGS are split on whitespace on purpose.
           # shellcheck disable=SC2086
-          cargo clippy --all-targets $FEATURE_ARGS $TARGET_ARGS $CLIPPY_ARGS -- -D warnings
+          cargo clippy $PACKAGE_ARGS --all-targets $FEATURE_ARGS $TARGET_ARGS $CLIPPY_ARGS \
+            -- -D warnings
 
       - name: check
         env:
@@ -280,7 +299,7 @@ jobs:
           FEATURE_ARGS: ${{ inputs.feature-args }}
         run: |
           # shellcheck disable=SC2086
-          cargo check --all-targets $FEATURE_ARGS $TARGET_ARGS $CLIPPY_ARGS
+          cargo check $PACKAGE_ARGS --all-targets $FEATURE_ARGS $TARGET_ARGS $CLIPPY_ARGS
 
       - name: test
         if: env.NATIVE == 'true' && inputs.test-command != ''
@@ -288,6 +307,21 @@ jobs:
           FEATURE_ARGS: ${{ inputs.feature-args }}
           TEST_COMMAND: ${{ inputs.test-command }}
         run: eval "$TEST_COMMAND"
+
+      - name: doctests
+        if: env.NATIVE == 'true' && inputs.test-command != '' && inputs.doc-tests
+        run: |
+          set -uo pipefail
+          log="$RUNNER_TEMP/doctests.log"
+          # PACKAGE_ARGS and FEATURE_ARGS are split on whitespace on purpose.
+          # shellcheck disable=SC2086
+          cargo test $PACKAGE_ARGS --doc $FEATURE_ARGS 2>&1 | tee "$log"
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ] && grep -q 'no library targets found' "$log"; then
+            echo "::notice title=doctests skipped::no library target in the selected packages"
+            exit 0
+          fi
+          exit "$code"
 
       - name: build (cross target, not run)
         if: env.NATIVE != 'true' && inputs.build-command != ''
