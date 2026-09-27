@@ -1,0 +1,183 @@
+name: sonarcloud
+
+# Reusable SonarCloud analysis, unifying the sonarcloud.yml of rtok, ketch, cox, runa,
+# crates-packages, slint_dart and stator. Every step skips with a notice when SONAR_TOKEN is
+# empty (fork PRs, before the secret is added), so the job stays green. By default coverage and
+# the scan are soft-fail (`soft-fail: true`); set it false to make the analysis blocking.
+#
+# Project settings come from the caller's sonar-project.properties, or from the `organization`
+# / `project-key` inputs. Rust callers set `rust: true` for LCOV coverage via cargo-llvm-cov
+# (coverage/lcov.info; point sonar.rust.lcov.reportPaths or similar at it).
+#
+# Caller job permissions: contents: read, pull-requests: read.
+# Public repositories only (listepo policy: no scans on private repositories).
+on:
+  workflow_call:
+    inputs:
+      organization:
+        description: SonarCloud organization key (-Dsonar.organization). Empty uses properties.
+        type: string
+        required: false
+        default: ""
+      project-key:
+        description: SonarCloud project key (-Dsonar.projectKey). Empty uses properties.
+        type: string
+        required: false
+        default: ""
+      args:
+        description: Extra scanner arguments, e.g. "-Dsonar.sources=src".
+        type: string
+        required: false
+        default: ""
+      project-base-dir:
+        description: Directory the scanner runs in.
+        type: string
+        required: false
+        default: "."
+      mise:
+        description: Install tools from the caller's mise.toml first.
+        type: boolean
+        required: false
+        default: true
+      mise-install-args:
+        description: Tools mise installs (empty installs everything in mise.toml).
+        type: string
+        required: false
+        default: ""
+      rust:
+        description: Rust project (llvm-tools-preview, cargo-llvm-cov, rust-cache).
+        type: boolean
+        required: false
+        default: false
+      setup-command:
+        description: Bash run before coverage (dependencies, codegen).
+        type: string
+        required: false
+        default: ""
+      coverage-command:
+        description: >-
+          Bash that writes coverage reports. Empty: `cargo llvm-cov --locked --lcov
+          --output-path coverage/lcov.info` when `rust` is true, otherwise nothing.
+        type: string
+        required: false
+        default: ""
+      soft-fail:
+        description: continue-on-error for coverage and the scan.
+        type: boolean
+        required: false
+        default: true
+      timeout-minutes:
+        description: Job timeout.
+        type: number
+        required: false
+        default: 60
+    secrets:
+      SONAR_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  sonarcloud:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    steps:
+      - name: Skip SonarCloud (no token)
+        if: env.SONAR_TOKEN == ''
+        run: |
+          echo "::notice title=sonarcloud skipped::SONAR_TOKEN is not set."
+          echo "Expected for fork pull requests and before the secret is added."
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.SONAR_TOKEN != ''
+        with:
+          fetch-depth: 0 # Sonar uses blame data for new-code detection
+          persist-credentials: false
+
+      - if: env.SONAR_TOKEN != '' && inputs.mise
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          working_directory: ${{ inputs.project-base-dir }}
+          install_args: ${{ inputs.mise-install-args }}
+
+      - name: Rust coverage tools
+        if: env.SONAR_TOKEN != '' && inputs.rust
+        working-directory: ${{ inputs.project-base-dir }}
+        run: |
+          set -euo pipefail
+          if command -v mise >/dev/null && v="$(mise current rust 2>/dev/null)" && [ -n "$v" ]
+          then
+            echo "RUSTUP_TOOLCHAIN=$v" >> "$GITHUB_ENV"
+            export RUSTUP_TOOLCHAIN="$v"
+          fi
+          rustup component add llvm-tools-preview
+
+      - if: env.SONAR_TOKEN != '' && inputs.rust
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ${{ inputs.project-base-dir }} -> target
+          key: sonarcloud
+          save-if: >-
+            ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+
+      - if: env.SONAR_TOKEN != '' && inputs.rust
+        uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Setup
+        if: env.SONAR_TOKEN != '' && inputs.setup-command != ''
+        working-directory: ${{ inputs.project-base-dir }}
+        env:
+          SETUP_COMMAND: ${{ inputs.setup-command }}
+        run: eval "$SETUP_COMMAND"
+
+      - name: Coverage
+        if: env.SONAR_TOKEN != '' && (inputs.coverage-command != '' || inputs.rust)
+        continue-on-error: ${{ inputs.soft-fail }}
+        working-directory: ${{ inputs.project-base-dir }}
+        env:
+          COVERAGE_COMMAND: ${{ inputs.coverage-command }}
+        run: |
+          set -euo pipefail
+          mkdir -p coverage
+          if [ -n "$COVERAGE_COMMAND" ]; then
+            eval "$COVERAGE_COMMAND"
+          else
+            cargo llvm-cov --locked --lcov --output-path coverage/lcov.info
+          fi
+
+      - name: Scanner arguments
+        id: args
+        if: env.SONAR_TOKEN != ''
+        env:
+          ORG: ${{ inputs.organization }}
+          KEY: ${{ inputs.project-key }}
+          ARGS: ${{ inputs.args }}
+        run: |
+          a="$ARGS"
+          [ -z "$ORG" ] || a="-Dsonar.organization=$ORG $a"
+          [ -z "$KEY" ] || a="-Dsonar.projectKey=$KEY $a"
+          echo "args=$a" >> "$GITHUB_OUTPUT"
+
+      - name: SonarCloud scan
+        if: env.SONAR_TOKEN != ''
+        continue-on-error: ${{ inputs.soft-fail }}
+        uses: SonarSource/sonarqube-scan-action@ba9859eae8dd6bd29e412f25ddbbef3d032000f4 # v8.2.2
+        with:
+          projectBaseDir: ${{ inputs.project-base-dir }}
+          args: ${{ steps.args.outputs.args }}
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io
+          GITHUB_TOKEN: ${{ github.token }}

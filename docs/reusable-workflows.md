@@ -14,13 +14,18 @@ repository. All third-party actions are pinned to full commit SHAs.
 | `pipeline.yml` | ci-rust + CodeQL + Semgrep + Snyk in parallel behind a `gate` |
 | `release-plz.yml` | release PR; on its merge verify, then dispatch the release workflow |
 | `release.yml` | manual release: checks, verify, build, sign/notarize, smoke, Release, publish |
+| `dependabot-automerge.yml` | merge allowed Dependabot updates after green CI; label/flag others |
+| `sonarcloud.yml` | SonarCloud scan (+ Rust LCOV coverage); skipped without `SONAR_TOKEN` |
 
 Secrets (declared in each workflow's `on.workflow_call.secrets`):
 
 - `snyk.yml`, `pipeline.yml`: `SNYK_TOKEN` (optional).
 - `release-plz.yml`: `RELEASE_PLZ_TOKEN` (required).
-- `release.yml`: `MACOS_CERTIFICATE`, `MACOS_CERTIFICATE_PWD`, `APPLE_ID`, `APPLE_TEAM_ID`,
+- `release.yml`: `MACOS_CERTIFICATE`, `MACOS_CERTIFICATE_PWD`, `APPSTORE_CONNECT_KEY`,
+  `APPSTORE_CONNECT_KEY_ID`, `APPSTORE_CONNECT_ISSUER_ID`, `APPLE_ID`, `APPLE_TEAM_ID`,
   `APPLE_APP_PASSWORD`, `CARGO_REGISTRY_TOKEN`, `PUBLISH_TOKEN` (all optional).
+- `sonarcloud.yml`: `SONAR_TOKEN` (optional; every step skips without it).
+- `dependabot-automerge.yml`: none (uses `github.token`).
 
 `permissions:` the calling job must grant:
 
@@ -29,10 +34,18 @@ Secrets (declared in each workflow's `on.workflow_call.secrets`):
   `security-events: write` (SARIF upload), `actions: read`.
 - `release-plz.yml`: `contents: write`, `pull-requests: write`, `actions: write`.
 - `release.yml`: `contents: write` (tag + Release), `checks: read`, `actions: read`.
+- `dependabot-automerge.yml`: `contents: write`, `pull-requests: write`, `actions: read`.
+- `sonarcloud.yml`: `contents: read`, `pull-requests: read`.
 
-Composite action: `.github/actions/gate` fails unless every job in a `needs` JSON succeeded
-(`skipped` counts as failure unless listed in `skip-ok`). Use it for a local gate that also
-covers repository-specific jobs.
+Composite actions (reference them as `listepo/infra/.github/actions/<name>@<sha>`):
+
+| Action | Purpose |
+| --- | --- |
+| `gate` | fail unless every job in a `needs` JSON succeeded (`skip-ok` lists allowed skips) |
+| `revert-on-failure` | revert a failed push, push the revert, open a draft re-apply PR |
+| `macos-sign` | Developer ID codesign (or identity discovery for cargo-dist) + notarization |
+
+Private repositories: no scans (CodeQL, Semgrep, Snyk, SonarCloud) by listepo policy.
 
 ## Referencing and pinning
 
@@ -77,14 +90,16 @@ every job fails if `rustc --version` is not the pinned version.
 | `matrix` | `""` (shared five-target matrix) | JSON `[{"os", "target", "test"?}]` |
 | `rust-version` | `""` | exact toolchain via rustup instead of mise |
 | `working-directory` | `.` | Cargo workspace |
-| `feature-args` | `--all-features` | used by clippy, check, test, build, MSRV |
+| `package-args` | `--workspace` | packages for every cargo command (`-p x`; `""` = root only) |
+| `feature-args` | `--all-features` | used by clippy, check, test, doctests, build, MSRV |
 | `clippy-args` | `""` | extra args before `--` for clippy and check |
 | `tools` | `""` | taiki-e/install-action tools (e.g. `nextest`) |
 | `setup-command` | `""` | bash before clippy (system packages) |
-| `test-command` | `cargo test --all-targets $FEATURE_ARGS` | native targets only |
-| `build-command` | `cargo build --all-targets $FEATURE_ARGS --target "$TARGET"` | cross targets |
+| `test-command` | `cargo test $PACKAGE_ARGS --all-targets $FEATURE_ARGS` | native targets only |
+| `doc-tests` | `true` | `cargo test $PACKAGE_ARGS --doc $FEATURE_ARGS`; no lib: skipped |
+| `build-command` | `cargo build $PACKAGE_ARGS --all-targets $FEATURE_ARGS --target "$TARGET"` | |
 | `msrv` | `""` | e.g. `1.85`; adds an `msrv` job |
-| `msrv-command` | `cargo check --workspace --all-targets $FEATURE_ARGS` | |
+| `msrv-command` | `cargo check $PACKAGE_ARGS --all-targets $FEATURE_ARGS` | |
 | `fmt-runs-on`, `mise-install-args`, `cache-all-refs`, `timeout-minutes` | | |
 
 ## codeql.yml / semgrep.yml / snyk.yml
@@ -98,11 +113,22 @@ every job fails if `rustc --version` is not the pinned version.
 
 ## pipeline.yml
 
-Inputs: `rust` (false), `rust-working-directory`, `rust-matrix`, `rust-setup-command`,
-`rust-test-command`, `rust-feature-args`, `rust-msrv`, `codeql` (true), `codeql-languages`,
-`codeql-build-mode`, `codeql-queries`, `semgrep` (true), `semgrep-config`, `snyk` (true),
-`upload-sarif` (true). Output: `result` (`success`). Draft PRs skip every job, including the
-gate, so a draft never shows a green `gate`.
+Inputs:
+
+- `rust` (false) runs ci-rust.yml. Every ci-rust.yml input is passed through as `rust-<name>`
+  with the same default: `rust-matrix`, `rust-rust-version`, `rust-fmt-runs-on`,
+  `rust-working-directory`, `rust-mise-install-args`, `rust-clippy-args`, `rust-tools`,
+  `rust-setup-command`, `rust-test-command`, `rust-doc-tests`, `rust-build-command`,
+  `rust-package-args`, `rust-feature-args`, `rust-msrv`, `rust-msrv-command`,
+  `rust-timeout-minutes`, `rust-cache-all-refs`.
+- `codeql` (true), `codeql-languages`, `codeql-build-mode`, `codeql-build-command`,
+  `codeql-queries`, `codeql-config-file`, `codeql-runs-on`.
+- `semgrep` (true), `semgrep-config`, `semgrep-extra-args`, `semgrep-fail-on-findings`.
+- `snyk` (true), `snyk-args`, `snyk-monitor`.
+- `upload-sarif` (true).
+
+Output: `result` (`success`). Draft PRs skip every job, including the gate, so a draft never
+shows a green `gate`.
 
 Copy-paste caller (`.github/workflows/pipeline.yml`):
 
@@ -245,3 +271,143 @@ Repositories built with cargo-dist (rtok, ketch, dunnage, runa, cox) keep dist's
 What stays in each repository: the thin callers above, `.github/dependabot.yml` (GitHub reads
 it only from the repository itself), repository-specific jobs (e.g. rtok's webui/wasm checks,
 plugin-version checks, revert-on-failure), cargo-dist's `release.yml` and `build-setup.yml`.
+
+## dependabot-automerge.yml
+
+Unifies rtok/ketch/cox. The caller runs its CI and passes the result. Only Dependabot's own
+PRs from a branch of the repository are touched. Update types listed in
+`allowed-update-types` are merged with `gh pr merge --<merge-method> --match-head-commit`
+(never `--admin`, never `--auto`); others get `review-label`, and a major update is assigned
+to `maintainer` with a review request. A failed CI or merge assigns and mentions `maintainer`.
+
+| Input | Default |
+| --- | --- |
+| `ci-result` (required) | – (pass `needs.ci.result`) |
+| `allowed-update-types` | `version-update:semver-patch` (space-separated) |
+| `merge-method` | `squash` (`merge`, `rebase`) |
+| `wait-workflow` | `""` (e.g. `pipeline.yml`: its latest PR run on the head commit must be green) |
+| `wait-minutes` | `90` (max 90) |
+| `review-label` | `needs-review` |
+| `maintainer` | `listepo` (empty: nobody is assigned or mentioned) |
+
+```yaml
+name: Dependabot
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+permissions: {}
+concurrency:
+  group: dependabot-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  ci:
+    if: github.actor == 'dependabot[bot]'
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+  automerge:
+    needs: ci
+    if: ${{ !cancelled() && github.actor == 'dependabot[bot]' }}
+    uses: listepo/infra/.github/workflows/dependabot-automerge.yml@<sha> # main
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
+    with:
+      ci-result: ${{ needs.ci.result }}
+      wait-workflow: pipeline.yml
+```
+
+The repository must allow squash merges (the default method) and, for the review label, the
+token needs `pull-requests: write`.
+
+## sonarcloud.yml
+
+Unifies the sonarcloud.yml of rtok, ketch, cox, runa, crates-packages, slint_dart and stator.
+Every step skips with a notice when `SONAR_TOKEN` is empty; coverage and scan are soft-fail
+unless `soft-fail: false`.
+
+| Input | Default |
+| --- | --- |
+| `organization`, `project-key` | `""` (use `sonar-project.properties`) |
+| `args` | `""` extra scanner args |
+| `project-base-dir` | `.` |
+| `mise`, `mise-install-args` | `true`, `""` |
+| `rust` | `false` (llvm-tools-preview, cargo-llvm-cov, rust-cache) |
+| `setup-command` | `""` |
+| `coverage-command` | `""` (Rust: `cargo llvm-cov --locked --lcov`, to `coverage/lcov.info`) |
+| `soft-fail` | `true` |
+| `timeout-minutes` | `60` |
+
+```yaml
+jobs:
+  sonarcloud:
+    uses: listepo/infra/.github/workflows/sonarcloud.yml@<sha> # main
+    permissions:
+      contents: read
+      pull-requests: read
+    with:
+      rust: true
+      organization: listepo
+      project-key: listepo_ketch
+    secrets:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+```
+
+## revert-on-failure (composite action)
+
+Unifies both generations found in six repositories: the older one (bindsmith, cox, runa,
+slint_dart, stator: skip new branches, missing bases, bot commits, earlier auto-reverts and
+pushes touching `.github/`) and rtok's (adds the draft re-apply PR).
+
+Inputs: `before` (`github.event.before`), `after` (`github.sha`), `branch`
+(`github.ref_name`), `reapply-pr` (`true`), `skip-workflow-changes` (`true`), `dry-run`
+(`false`), `token` (`github.token`). Outputs: `reverted`, `pr-url`. The action checks out the
+repository itself. Job permissions: `contents: write`, plus `pull-requests: write` for the
+re-apply PR (and the repository setting "Allow GitHub Actions to create and approve pull
+requests").
+
+```yaml
+  revert-on-failure:
+    needs: [lint, test]
+    if: >-
+      always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+      && contains(join(needs.*.result, ','), 'failure')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: listepo/infra/.github/actions/revert-on-failure@<sha> # main
+```
+
+## macos-sign (composite action)
+
+Extracted from rtok/dunnage/ketch `build-setup.yml` (identity discovery for cargo-dist) and
+ketch `build-check.yml` (notarization). A no-op on non-macOS runners. Every credential is
+optional: missing ones skip with a notice unless `require: "true"`.
+
+| Input | Notes |
+| --- | --- |
+| `mode` | `sign` (default), `discover` (export `CODESIGN_IDENTITY` for dist), `notarize` |
+| `paths` | newline/space-separated files |
+| `certificate`, `certificate-password` | base64 `.p12` Developer ID Application + password |
+| `notarize` | `true` (sign mode) |
+| `api-key`, `api-key-id`, `api-issuer` | App Store Connect API key (base64 `.p8`) |
+| `apple-id`, `team-id`, `app-password` | alternative Apple ID auth |
+| `require` | `false` |
+
+Outputs: `identity`, `signed`, `notarized`. `release.yml` uses it (`macos-sign` input).
+In a cargo-dist `build-setup.yml`:
+
+```yaml
+- uses: listepo/infra/.github/actions/macos-sign@<sha> # main
+  if: runner.os == 'macOS'
+  with:
+    mode: discover
+    certificate: ${{ secrets.MACOS_CERTIFICATE }}
+    certificate-password: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+    require: "true"
+```
+

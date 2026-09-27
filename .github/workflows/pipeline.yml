@@ -19,13 +19,38 @@ on:
         type: boolean
         required: false
         default: false
+      rust-matrix:
+        description: ci-rust.yml `matrix` (JSON). Empty uses the shared matrix.
+        type: string
+        required: false
+        default: ""
+      rust-rust-version:
+        description: ci-rust.yml `rust-version` (empty uses Rust from mise.toml).
+        type: string
+        required: false
+        default: ""
+      rust-fmt-runs-on:
+        description: ci-rust.yml `fmt-runs-on`.
+        type: string
+        required: false
+        default: ubuntu-latest
       rust-working-directory:
         description: ci-rust.yml `working-directory`.
         type: string
         required: false
         default: "."
-      rust-matrix:
-        description: ci-rust.yml `matrix` (JSON). Empty uses ci-rust.yml's shared matrix.
+      rust-mise-install-args:
+        description: ci-rust.yml `mise-install-args`.
+        type: string
+        required: false
+        default: rust
+      rust-clippy-args:
+        description: ci-rust.yml `clippy-args`.
+        type: string
+        required: false
+        default: ""
+      rust-tools:
+        description: ci-rust.yml `tools`.
         type: string
         required: false
         default: ""
@@ -38,7 +63,22 @@ on:
         description: ci-rust.yml `test-command`.
         type: string
         required: false
-        default: cargo test --all-targets $FEATURE_ARGS
+        default: cargo test $PACKAGE_ARGS --all-targets $FEATURE_ARGS
+      rust-doc-tests:
+        description: ci-rust.yml `doc-tests`.
+        type: boolean
+        required: false
+        default: true
+      rust-build-command:
+        description: ci-rust.yml `build-command`.
+        type: string
+        required: false
+        default: cargo build $PACKAGE_ARGS --all-targets $FEATURE_ARGS --target "$TARGET"
+      rust-package-args:
+        description: ci-rust.yml `package-args`.
+        type: string
+        required: false
+        default: --workspace
       rust-feature-args:
         description: ci-rust.yml `feature-args`.
         type: string
@@ -49,6 +89,21 @@ on:
         type: string
         required: false
         default: ""
+      rust-msrv-command:
+        description: ci-rust.yml `msrv-command`.
+        type: string
+        required: false
+        default: cargo check $PACKAGE_ARGS --all-targets $FEATURE_ARGS
+      rust-timeout-minutes:
+        description: ci-rust.yml `timeout-minutes`.
+        type: number
+        required: false
+        default: 60
+      rust-cache-all-refs:
+        description: ci-rust.yml `cache-all-refs`.
+        type: boolean
+        required: false
+        default: false
       codeql:
         description: Run codeql.yml.
         type: boolean
@@ -69,6 +124,21 @@ on:
         type: string
         required: false
         default: security-and-quality
+      codeql-build-command:
+        description: codeql.yml `build-command` (build-mode manual).
+        type: string
+        required: false
+        default: ""
+      codeql-config-file:
+        description: codeql.yml `config-file`.
+        type: string
+        required: false
+        default: ""
+      codeql-runs-on:
+        description: codeql.yml `runs-on`.
+        type: string
+        required: false
+        default: ubuntu-latest
       semgrep:
         description: Run semgrep.yml.
         type: boolean
@@ -79,8 +149,28 @@ on:
         type: string
         required: false
         default: p/default
+      semgrep-extra-args:
+        description: semgrep.yml `extra-args`.
+        type: string
+        required: false
+        default: ""
+      semgrep-fail-on-findings:
+        description: semgrep.yml `fail-on-findings`.
+        type: boolean
+        required: false
+        default: false
       snyk:
         description: Run snyk.yml (skips itself without SNYK_TOKEN).
+        type: boolean
+        required: false
+        default: true
+      snyk-args:
+        description: snyk.yml `args`.
+        type: string
+        required: false
+        default: --all-projects
+      snyk-monitor:
+        description: snyk.yml `monitor`.
         type: boolean
         required: false
         default: true
@@ -109,12 +199,23 @@ jobs:
       && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     uses: $/.github/workflows/ci-rust.yml
     with:
-      working-directory: ${{ inputs.rust-working-directory }}
       matrix: ${{ inputs.rust-matrix }}
+      rust-version: ${{ inputs.rust-rust-version }}
+      fmt-runs-on: ${{ inputs.rust-fmt-runs-on }}
+      working-directory: ${{ inputs.rust-working-directory }}
+      mise-install-args: ${{ inputs.rust-mise-install-args }}
+      clippy-args: ${{ inputs.rust-clippy-args }}
+      tools: ${{ inputs.rust-tools }}
       setup-command: ${{ inputs.rust-setup-command }}
       test-command: ${{ inputs.rust-test-command }}
+      doc-tests: ${{ inputs.rust-doc-tests }}
+      build-command: ${{ inputs.rust-build-command }}
+      package-args: ${{ inputs.rust-package-args }}
       feature-args: ${{ inputs.rust-feature-args }}
       msrv: ${{ inputs.rust-msrv }}
+      msrv-command: ${{ inputs.rust-msrv-command }}
+      timeout-minutes: ${{ inputs.rust-timeout-minutes }}
+      cache-all-refs: ${{ inputs.rust-cache-all-refs }}
 
   codeql:
     if: >-
@@ -129,6 +230,9 @@ jobs:
       languages: ${{ inputs.codeql-languages }}
       build-mode: ${{ inputs.codeql-build-mode }}
       queries: ${{ inputs.codeql-queries }}
+      build-command: ${{ inputs.codeql-build-command }}
+      config-file: ${{ inputs.codeql-config-file }}
+      runs-on: ${{ inputs.codeql-runs-on }}
       upload: ${{ inputs.upload-sarif }}
 
   semgrep:
@@ -142,6 +246,8 @@ jobs:
       actions: read
     with:
       config: ${{ inputs.semgrep-config }}
+      extra-args: ${{ inputs.semgrep-extra-args }}
+      fail-on-findings: ${{ inputs.semgrep-fail-on-findings }}
       upload: ${{ inputs.upload-sarif }}
 
   snyk:
@@ -154,6 +260,8 @@ jobs:
       contents: read
       actions: read
     with:
+      args: ${{ inputs.snyk-args }}
+      monitor: ${{ inputs.snyk-monitor }}
       upload: ${{ inputs.upload-sarif }}
     secrets:
       SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}

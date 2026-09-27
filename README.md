@@ -15,9 +15,12 @@ Shared reusable GitHub workflows and build configs for listepo repositories
 | [`pipeline.yml`](.github/workflows/pipeline.yml) | ci-rust + CodeQL + Semgrep + Snyk in parallel behind a `gate` |
 | [`release-plz.yml`](.github/workflows/release-plz.yml) | release PR, then verify + dispatch of the release workflow |
 | [`release.yml`](.github/workflows/release.yml) | manual release: checks, verify, build, sign, smoke, Release, publish |
+| [`dependabot-automerge.yml`](.github/workflows/dependabot-automerge.yml) | merge allowed Dependabot updates after green CI |
+| [`sonarcloud.yml`](.github/workflows/sonarcloud.yml) | SonarCloud scan, skipped without `SONAR_TOKEN` |
 
-Composite action [`gate`](.github/actions/gate/action.yml) fails unless every needed job
-succeeded. `self-test.yml` runs ci-rust.yml and pipeline.yml against a fixture crate.
+Composite actions: [`gate`](.github/actions/gate/action.yml) (fail unless every needed job
+succeeded), [`revert-on-failure`](.github/actions/revert-on-failure/action.yml) and
+[`macos-sign`](.github/actions/macos-sign/action.yml). `self-test.yml` runs ci-rust.yml and pipeline.yml against a fixture crate.
 
 ## How to call
 

@@ -1,0 +1,184 @@
+name: macos-sign
+description: >-
+  macOS Developer ID codesigning and notarization, extracted from rtok/dunnage/ketch
+  build-setup.yml and ketch build-check.yml. All secrets are optional: without them the action
+  skips with a notice, unless `require` is true. A no-op on non-macOS runners.
+# Modes:
+#   discover  import the .p12 into a throwaway keychain, export CODESIGN_IDENTITY (the
+#             Developer ID Application hash) to the job, delete the keychain. For cargo-dist,
+#             which signs itself from CODESIGN_IDENTITY + CODESIGN_CERTIFICATE(_PASSWORD).
+#   sign      import, codesign every file in `paths` (hardened runtime, timestamp), verify,
+#             delete the keychain; then notarize them when notarization credentials are set.
+#   notarize  notarize `paths` only (already signed, e.g. by dist).
+# Notarization takes either an App Store Connect API key (api-key + api-key-id + api-issuer)
+# or an Apple ID (apple-id + team-id + app-password). Bare Mach-O binaries cannot be stapled;
+# Gatekeeper looks the ticket up online by cdhash.
+inputs:
+  mode:
+    description: discover, sign or notarize.
+    required: false
+    default: sign
+  paths:
+    description: Newline- or space-separated files to sign/notarize (sign, notarize modes).
+    required: false
+    default: ""
+  certificate:
+    description: Base64 Developer ID Application .p12 (secret MACOS_CERTIFICATE).
+    required: false
+    default: ""
+  certificate-password:
+    description: Password of the .p12 (secret MACOS_CERTIFICATE_PWD).
+    required: false
+    default: ""
+  notarize:
+    description: Notarize after signing in sign mode (when credentials are set).
+    required: false
+    default: "true"
+  api-key:
+    description: Base64 App Store Connect API key (.p8).
+    required: false
+    default: ""
+  api-key-id:
+    description: App Store Connect API key id.
+    required: false
+    default: ""
+  api-issuer:
+    description: App Store Connect issuer id.
+    required: false
+    default: ""
+  apple-id:
+    description: Apple ID for notarytool (alternative to the API key).
+    required: false
+    default: ""
+  team-id:
+    description: Apple developer team id.
+    required: false
+    default: ""
+  app-password:
+    description: App-specific password of the Apple ID.
+    required: false
+    default: ""
+  require:
+    description: Fail instead of skipping when the credentials a step needs are missing.
+    required: false
+    default: "false"
+outputs:
+  identity:
+    description: Developer ID Application identity hash (empty when skipped).
+    value: ${{ steps.cert.outputs.identity }}
+  signed:
+    description: "`true` when `paths` were signed."
+    value: ${{ steps.cert.outputs.signed }}
+  notarized:
+    description: "`true` when `paths` were notarized (Accepted)."
+    value: ${{ steps.notary.outputs.notarized }}
+runs:
+  using: composite
+  steps:
+    - name: Codesign identity
+      id: cert
+      if: runner.os == 'macOS' && inputs.mode != 'notarize'
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        PATHS: ${{ inputs.paths }}
+        CERT: ${{ inputs.certificate }}
+        CERT_PWD: ${{ inputs.certificate-password }}
+        REQUIRE: ${{ inputs.require }}
+      run: |
+        set -euo pipefail
+        echo "signed=false" >> "$GITHUB_OUTPUT"
+        case "$MODE" in discover|sign) ;; *) echo "unknown mode '$MODE'" >&2; exit 1 ;; esac
+        if [ -z "$CERT" ] || [ -z "$CERT_PWD" ]; then
+          if [ "$REQUIRE" = "true" ]; then
+            echo "::error::macos-sign: certificate and certificate-password must both be set"
+            exit 1
+          fi
+          echo "::notice title=codesign skipped::no Developer ID certificate provided"
+          exit 0
+        fi
+        keychain="$RUNNER_TEMP/macos-sign-$$.keychain-db"
+        kpwd="$(openssl rand -hex 16)"
+        p12="$RUNNER_TEMP/macos-sign-$$.p12"
+        trap 'rm -f "$p12"; security delete-keychain "$keychain" 2>/dev/null || true' EXIT
+        echo "$CERT" | base64 --decode > "$p12"
+        security create-keychain -p "$kpwd" "$keychain"
+        security set-keychain-settings -lut 21600 "$keychain"
+        security unlock-keychain -p "$kpwd" "$keychain"
+        security import "$p12" -P "$CERT_PWD" -f pkcs12 -k "$keychain" -T /usr/bin/codesign
+        security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kpwd" \
+          "$keychain" >/dev/null
+        identity="$(security find-identity -v -p codesigning "$keychain" \
+          | sed -nE 's/^ *[0-9]+\) ([0-9A-F]{40}) "Developer ID Application:.*/\1/p')"
+        if [ "$(printf '%s\n' "$identity" | grep -c .)" -ne 1 ]; then
+          echo "expected exactly one Developer ID Application identity, found:" >&2
+          security find-identity -v -p codesigning "$keychain" >&2
+          exit 1
+        fi
+        echo "identity=$identity" >> "$GITHUB_OUTPUT"
+        if [ "$MODE" = "discover" ]; then
+          echo "CODESIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "CODESIGN_IDENTITY exported (Developer ID Application hash)"
+          exit 0
+        fi
+        [ -n "${PATHS//[[:space:]]/}" ] || { echo "sign mode needs paths" >&2; exit 1; }
+        for f in $PATHS; do
+          codesign --force --options runtime --timestamp --keychain "$keychain" \
+            --sign "$identity" "$f"
+          codesign --verify --strict --verbose=2 "$f"
+        done
+        echo "signed=true" >> "$GITHUB_OUTPUT"
+
+    - name: Notarize
+      id: notary
+      if: >-
+        runner.os == 'macOS'
+        && (inputs.mode == 'notarize'
+          || (inputs.mode == 'sign' && inputs.notarize == 'true'
+            && steps.cert.outputs.signed == 'true'))
+      shell: bash
+      env:
+        PATHS: ${{ inputs.paths }}
+        API_KEY: ${{ inputs.api-key }}
+        API_KEY_ID: ${{ inputs.api-key-id }}
+        API_ISSUER: ${{ inputs.api-issuer }}
+        APPLE_ID: ${{ inputs.apple-id }}
+        TEAM_ID: ${{ inputs.team-id }}
+        APP_PASSWORD: ${{ inputs.app-password }}
+        REQUIRE: ${{ inputs.require }}
+      run: |
+        set -euo pipefail
+        echo "notarized=false" >> "$GITHUB_OUTPUT"
+        work="$RUNNER_TEMP/macos-notarize-$$"
+        mkdir -p "$work"
+        trap 'rm -rf "$work"' EXIT
+        if [ -n "$API_KEY" ] && [ -n "$API_KEY_ID" ] && [ -n "$API_ISSUER" ]; then
+          echo "$API_KEY" | base64 --decode > "$work/key.p8"
+          auth=(--key "$work/key.p8" --key-id "$API_KEY_ID" --issuer "$API_ISSUER")
+        elif [ -n "$APPLE_ID" ] && [ -n "$TEAM_ID" ] && [ -n "$APP_PASSWORD" ]; then
+          auth=(--apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APP_PASSWORD")
+        else
+          if [ "$REQUIRE" = "true" ]; then
+            echo "::error::macos-sign: notarization needs an API key or an Apple ID set"
+            exit 1
+          fi
+          echo "::notice title=notarization skipped::no notarization credentials provided"
+          exit 0
+        fi
+        [ -n "${PATHS//[[:space:]]/}" ] || { echo "notarize needs paths" >&2; exit 1; }
+        i=0
+        for f in $PATHS; do
+          i=$((i + 1))
+          # notarytool takes a zip; the ticket is keyed by cdhash, so it covers every copy.
+          ditto -c -k --keepParent "$f" "$work/$i.zip"
+          xcrun notarytool submit "$work/$i.zip" "${auth[@]}" --wait --output-format json \
+            > "$work/$i.json" || true
+          cat "$work/$i.json"
+          if [ "$(jq -r .status "$work/$i.json")" != "Accepted" ]; then
+            id="$(jq -r '.id // empty' "$work/$i.json")"
+            [ -z "$id" ] || xcrun notarytool log "$id" "${auth[@]}" >&2 || true
+            echo "::error::notarization of $f was not accepted"
+            exit 1
+          fi
+        done
+        echo "notarized=true" >> "$GITHUB_OUTPUT"

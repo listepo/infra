@@ -1,0 +1,210 @@
+name: dependabot-automerge
+
+# Reusable Dependabot auto-merge, unifying rtok/ketch/cox `dependabot.yml` workflows. The
+# caller runs its own CI first and passes the result:
+#
+# - `automerge`: only Dependabot's own PRs from a branch of the repository, only when CI
+#   succeeded. Optionally waits for another workflow on the same commit (e.g. pipeline.yml) and
+#   refuses unless its latest run is green. Update types in `allowed-update-types` are merged
+#   with `gh pr merge --<merge-method> --match-head-commit <sha>` (never --admin, never --auto:
+#   without branch protection --auto merges at once). Other updates get `review-label`; a major
+#   update also assigns `maintainer` and requests a review.
+# - `notify-failure`: when CI or the merge failed, assign and mention `maintainer` with the
+#   failing jobs. A cancelled run stays silent.
+#
+# Caller job permissions: contents: write, pull-requests: write, actions: read.
+on:
+  workflow_call:
+    inputs:
+      ci-result:
+        description: >-
+          Result of the caller's CI job (`needs.<ci>.result`). Only `success` merges; `failure`
+          notifies.
+        type: string
+        required: true
+      allowed-update-types:
+        description: >-
+          Space-separated dependabot/fetch-metadata update types merged automatically:
+          version-update:semver-patch, version-update:semver-minor, version-update:semver-major.
+        type: string
+        required: false
+        default: version-update:semver-patch
+      merge-method:
+        description: squash, merge or rebase.
+        type: string
+        required: false
+        default: squash
+      wait-workflow:
+        description: >-
+          Workflow file whose latest pull_request run on the head commit must be green before
+          merging (e.g. pipeline.yml). Empty skips the wait.
+        type: string
+        required: false
+        default: ""
+      wait-minutes:
+        description: Minutes to wait for `wait-workflow` to finish (at most 90).
+        type: number
+        required: false
+        default: 90
+      review-label:
+        description: Label for updates that are not merged automatically. Empty adds none.
+        type: string
+        required: false
+        default: needs-review
+      maintainer:
+        description: GitHub login assigned/mentioned on major updates and failures; empty for none.
+        type: string
+        required: false
+        default: listepo
+
+permissions:
+  contents: read
+
+jobs:
+  automerge:
+    name: Merge allowed update
+    if: >-
+      inputs.ci-result == 'success'
+      && github.event_name == 'pull_request'
+      && github.actor == 'dependabot[bot]'
+      && github.event.pull_request.user.login == 'dependabot[bot]'
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    # Up to `wait-minutes` (max 90) of it is waiting for `wait-workflow`.
+    timeout-minutes: 100
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PR_URL: ${{ github.event.pull_request.html_url }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Check inputs
+        env:
+          METHOD: ${{ inputs.merge-method }}
+        run: |
+          case "$METHOD" in
+            squash|merge|rebase) ;;
+            *) echo "::error::merge-method must be squash, merge or rebase, not '$METHOD'"
+               exit 1 ;;
+          esac
+
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+
+      - name: Is this update type allowed?
+        id: allowed
+        env:
+          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
+          ALLOWED: ${{ inputs.allowed-update-types }}
+        run: |
+          if [ -n "$UPDATE_TYPE" ] && [[ " $ALLOWED " == *" $UPDATE_TYPE "* ]]; then
+            echo "merge=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "merge=false" >> "$GITHUB_OUTPUT"
+            echo "'$UPDATE_TYPE' is not in '$ALLOWED'; leaving it for review."
+          fi
+
+      - name: Wait for ${{ inputs.wait-workflow }} and require it green
+        if: steps.allowed.outputs.merge == 'true' && inputs.wait-workflow != ''
+        env:
+          WORKFLOW: ${{ inputs.wait-workflow }}
+          MINUTES: ${{ inputs.wait-minutes }}
+        run: |
+          set -euo pipefail
+          list() {
+            gh run list --workflow "$WORKFLOW" --commit "$HEAD_SHA" --event pull_request "$@"
+          }
+          [ "$MINUTES" -le 90 ] || MINUTES=90
+          for _ in $(seq 1 "$MINUTES"); do
+            total=$(list --json status --jq 'length')
+            pending=$(list --json status --jq '[.[] | select(.status != "completed")] | length')
+            if [ "$total" != "0" ] && [ "$pending" = "0" ]; then break; fi
+            sleep 60
+          done
+          latest=$(list --limit 1 --json status,conclusion \
+            --jq '.[0] | .status + "/" + .conclusion')
+          echo "$WORKFLOW on $HEAD_SHA: $latest"
+          if [ "$latest" != "completed/success" ]; then
+            echo "::error::$WORKFLOW on $HEAD_SHA is '$latest', not green; not merging."
+            exit 1
+          fi
+
+      # Pinned to the commit CI tested. No --admin (never bypass rules), no --auto (without
+      # branch protection it merges at once, before any check).
+      - name: Merge
+        if: steps.allowed.outputs.merge == 'true'
+        env:
+          METHOD: ${{ inputs.merge-method }}
+        run: gh pr merge "$PR_URL" "--$METHOD" --match-head-commit "$HEAD_SHA"
+
+      - name: Label for review
+        if: steps.allowed.outputs.merge != 'true' && inputs.review-label != ''
+        env:
+          LABEL: ${{ inputs.review-label }}
+        run: |
+          gh label create "$LABEL" --color FBCA04 --description "Needs a human review" \
+            2>/dev/null || true
+          gh pr edit "$PR_URL" --add-label "$LABEL"
+
+      - name: Flag major update for ${{ inputs.maintainer }}
+        if: >-
+          steps.allowed.outputs.merge != 'true' && inputs.maintainer != ''
+          && steps.meta.outputs.update-type == 'version-update:semver-major'
+        env:
+          WHO: ${{ inputs.maintainer }}
+          DEPS: ${{ steps.meta.outputs.dependency-names }}
+          PREV: ${{ steps.meta.outputs.previous-version }}
+          NEW: ${{ steps.meta.outputs.new-version }}
+        run: |
+          gh pr edit "$PR_URL" --add-assignee "$WHO" || echo "::warning::Could not assign $WHO."
+          gh pr edit "$PR_URL" --add-reviewer "$WHO" \
+            || echo "::warning::Could not request a review from $WHO."
+          # The backticks are Markdown, not shell.
+          # shellcheck disable=SC2016
+          printf '@%s Major update of `%s` (%s -> %s); CI is green. %s\n' \
+            "$WHO" "$DEPS" "$PREV" "$NEW" \
+            "It is never auto-merged: please review and merge (or close) it." > comment.md
+          gh pr comment "$PR_URL" --body-file comment.md
+
+  notify-failure:
+    name: Notify on failure
+    needs: automerge
+    # The caller's CI failed, or the merge job did. A cancelled run is not a failure.
+    if: >-
+      !cancelled() && inputs.maintainer != ''
+      && (inputs.ci-result == 'failure' || needs.automerge.result == 'failure')
+      && github.event_name == 'pull_request'
+      && github.actor == 'dependabot[bot]'
+      && github.event.pull_request.user.login == 'dependabot[bot]'
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PR_URL: ${{ github.event.pull_request.html_url }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      WHO: ${{ inputs.maintainer }}
+    steps:
+      - name: Assign and mention the maintainer with the failing jobs
+        run: |
+          # The backticks inside the jq program are Markdown, not shell.
+          # shellcheck disable=SC2016
+          failed=$(gh run view "$GITHUB_RUN_ID" --json jobs --jq '[.jobs[]
+            | select(.conclusion == "failure" or .conclusion == "timed_out")
+            | "- `" + .name + "` (" + .conclusion + ")"] | join("\n")')
+          [ -n "$failed" ] || failed="- (could not list the failing jobs; see the run)"
+          gh pr edit "$PR_URL" --add-assignee "$WHO" || echo "::warning::Could not assign $WHO."
+          {
+            printf '@%s CI or the merge step failed on this Dependabot pull request, ' "$WHO"
+            printf 'so it was not merged.\n\nFailing jobs:\n%s\n\nRun: %s\n' "$failed" "$RUN_URL"
+          } > comment.md
+          gh pr comment "$PR_URL" --body-file comment.md
