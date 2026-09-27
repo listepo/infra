@@ -311,7 +311,8 @@ jobs:
       - name: doctests
         if: env.NATIVE == 'true' && inputs.test-command != '' && inputs.doc-tests
         run: |
-          set -uo pipefail
+          # The step shell runs with -e; keep going after a failure to inspect the log.
+          set +e -uo pipefail
           log="$RUNNER_TEMP/doctests.log"
           # PACKAGE_ARGS and FEATURE_ARGS are split on whitespace on purpose.
           # shellcheck disable=SC2086
