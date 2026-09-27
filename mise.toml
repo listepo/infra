@@ -1,0 +1,2 @@
+[tools]
+actionlint = "1.7.12" # lint.yml and local `mise x -- actionlint`
