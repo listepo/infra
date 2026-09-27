@@ -91,18 +91,16 @@ runs:
         fi
         git config user.name "github-actions[bot]"
         git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-        parent_count=$(git rev-list --parents -n 1 "$AFTER" | awk '{print NF}')
         short=$(git rev-parse --short "$AFTER")
-        if [ "$parent_count" -gt 2 ]; then
-          git revert --no-edit -m 1 "$AFTER"
-        else
-          git revert --no-commit "$BEFORE".."$AFTER"
-          if git diff --cached --quiet; then
-            echo "Nothing to revert"
-            exit 0
-          fi
-          git commit -m "ci: auto-revert $short — $BRANCH CI failed"
+        # Revert the push's net change rather than commit by commit: `git revert A..B` stops
+        # at any merge commit inside the range.
+        base=$(git merge-base "$BEFORE" "$AFTER")
+        if git diff --quiet "$base" "$AFTER"; then
+          echo "Nothing to revert"
+          exit 0
         fi
+        git diff --binary "$base" "$AFTER" | git apply --reverse --3way --index
+        git commit -m "ci: auto-revert $short — $BRANCH CI failed"
         git log -1 --stat
         if [ "$DRY_RUN" = "true" ]; then
           echo "dry run: not pushing the revert to $BRANCH"
