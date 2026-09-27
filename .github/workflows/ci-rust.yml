@@ -3,9 +3,11 @@ name: ci-rust
 # Reusable Rust CI for listepo repositories.
 #
 # - `fmt`: cargo fmt --check, once.
-# - `rust`: one job per entry of the shared target matrix (below, the `matrix` input):
-#   clippy (--all-targets --all-features), check, then the tests where the runner can run
-#   the target natively, or a build of every target where it cannot (cross targets).
+# - `rust`: one job per entry of the shared target matrix (`SHARED_MATRIX` below, or the
+#   `matrix` input): clippy (--all-targets + `feature-args`), check, then the tests where the
+#   runner can run the target natively, or a build of every target where it cannot (cross
+#   targets).
+# - `msrv`: `msrv-command` with the `msrv` toolchain, when `msrv` is set.
 #
 # The Rust toolchain comes from the caller's mise.toml (listepo convention: mise.toml is
 # the single source of the Rust version). Pass `rust-version` to install an exact
@@ -17,18 +19,12 @@ on:
       matrix:
         description: >-
           JSON array of matrix entries, each {"os": <runner label>, "target": <Rust target
-          triple>}, optionally with "test": false to build instead of test. The default is
-          the shared listepo matrix; pass a subset only when a target is not supported.
+          triple>}, optionally with "test": false to build instead of test. Empty (default)
+          uses the shared listepo matrix (SHARED_MATRIX below); pass a subset only when a
+          target is not supported.
         type: string
         required: false
-        default: >-
-          [
-          {"os": "ubuntu-latest", "target": "x86_64-unknown-linux-gnu"},
-          {"os": "ubuntu-24.04-arm", "target": "aarch64-unknown-linux-gnu"},
-          {"os": "macos-latest", "target": "aarch64-apple-darwin"},
-          {"os": "macos-latest", "target": "x86_64-apple-darwin"},
-          {"os": "windows-latest", "target": "x86_64-pc-windows-msvc"}
-          ]
+        default: ""
       rust-version:
         description: >-
           Exact Rust toolchain (e.g. "1.98.1"). Empty (default) installs Rust from the
@@ -75,16 +71,41 @@ on:
       test-command:
         description: >-
           Bash that runs the tests on entries the runner can execute natively. Empty skips
-          the tests.
+          the tests. FEATURE_ARGS is set.
         type: string
         required: false
-        default: cargo test --all-targets --all-features
+        default: cargo test --all-targets $FEATURE_ARGS
       build-command:
         description: >-
-          Bash that builds a cross target the runner cannot execute. TARGET is set.
+          Bash that builds a cross target the runner cannot execute. TARGET and FEATURE_ARGS
+          are set.
         type: string
         required: false
-        default: cargo build --all-targets --all-features --target "$TARGET"
+        default: cargo build --all-targets $FEATURE_ARGS --target "$TARGET"
+      feature-args:
+        description: >-
+          Cargo feature flags for clippy, check and the MSRV check, e.g. "--all-features" or
+          "--no-default-features --features cli".
+        type: string
+        required: false
+        default: --all-features
+      msrv:
+        description: >-
+          Minimum supported Rust version (e.g. "1.85"). Non-empty adds an `msrv` job that runs
+          `msrv-command` with that toolchain on ubuntu-latest. Empty skips it.
+        type: string
+        required: false
+        default: ""
+      msrv-command:
+        description: Bash run by the `msrv` job. FEATURE_ARGS is set.
+        type: string
+        required: false
+        default: cargo check --workspace --all-targets $FEATURE_ARGS
+      timeout-minutes:
+        description: Timeout of each job.
+        type: number
+        required: false
+        default: 60
       cache-all-refs:
         description: >-
           Save the Cargo cache on every ref, not only the default branch. For callers
@@ -98,11 +119,34 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  SHARED_MATRIX: >-
+    [
+    {"os": "ubuntu-latest", "target": "x86_64-unknown-linux-gnu"},
+    {"os": "ubuntu-24.04-arm", "target": "aarch64-unknown-linux-gnu"},
+    {"os": "macos-latest", "target": "aarch64-apple-darwin"},
+    {"os": "macos-latest", "target": "x86_64-apple-darwin"},
+    {"os": "windows-latest", "target": "x86_64-pc-windows-msvc"}
+    ]
 
 jobs:
+  # The matrix input, or the shared matrix when it is empty (strategy cannot read `env`).
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - id: m
+        env:
+          INPUT_MATRIX: ${{ inputs.matrix }}
+        run: |
+          set -euo pipefail
+          m="${INPUT_MATRIX:-$SHARED_MATRIX}"
+          echo "matrix=$(jq -c . <<<"$m")" >> "$GITHUB_OUTPUT"
+
   fmt:
     name: fmt
     runs-on: ${{ inputs.fmt-runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
     defaults:
       run:
         shell: bash
@@ -141,11 +185,13 @@ jobs:
 
   rust:
     name: ${{ matrix.target }}
+    needs: plan
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.matrix) }}
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
     env:
       TARGET: ${{ matrix.target }}
     defaults:
@@ -222,21 +268,24 @@ jobs:
       - name: clippy
         env:
           CLIPPY_ARGS: ${{ inputs.clippy-args }}
+          FEATURE_ARGS: ${{ inputs.feature-args }}
         run: |
           # CLIPPY_ARGS and TARGET_ARGS are split on whitespace on purpose.
           # shellcheck disable=SC2086
-          cargo clippy --all-targets --all-features $TARGET_ARGS $CLIPPY_ARGS -- -D warnings
+          cargo clippy --all-targets $FEATURE_ARGS $TARGET_ARGS $CLIPPY_ARGS -- -D warnings
 
       - name: check
         env:
           CLIPPY_ARGS: ${{ inputs.clippy-args }}
+          FEATURE_ARGS: ${{ inputs.feature-args }}
         run: |
           # shellcheck disable=SC2086
-          cargo check --all-targets $TARGET_ARGS $CLIPPY_ARGS
+          cargo check --all-targets $FEATURE_ARGS $TARGET_ARGS $CLIPPY_ARGS
 
       - name: test
         if: env.NATIVE == 'true' && inputs.test-command != ''
         env:
+          FEATURE_ARGS: ${{ inputs.feature-args }}
           TEST_COMMAND: ${{ inputs.test-command }}
         run: eval "$TEST_COMMAND"
 
@@ -244,4 +293,42 @@ jobs:
         if: env.NATIVE != 'true' && inputs.build-command != ''
         env:
           BUILD_COMMAND: ${{ inputs.build-command }}
+          FEATURE_ARGS: ${{ inputs.feature-args }}
         run: eval "$BUILD_COMMAND"
+
+  msrv:
+    name: msrv ${{ inputs.msrv }}
+    if: inputs.msrv != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the MSRV toolchain
+        env:
+          MSRV: ${{ inputs.msrv }}
+        run: |
+          set -euo pipefail
+          rustup toolchain install "$MSRV" --profile minimal
+          echo "RUSTUP_TOOLCHAIN=$MSRV" >> "$GITHUB_ENV"
+          RUSTUP_TOOLCHAIN="$MSRV" rustc --version
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ${{ inputs.working-directory }} -> target
+          key: msrv-${{ inputs.msrv }}
+          save-if: >-
+            ${{ inputs.cache-all-refs
+            || github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+
+      - name: MSRV check
+        env:
+          FEATURE_ARGS: ${{ inputs.feature-args }}
+          MSRV_COMMAND: ${{ inputs.msrv-command }}
+        run: eval "$MSRV_COMMAND"
