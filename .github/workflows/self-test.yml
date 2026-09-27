@@ -34,6 +34,17 @@ jobs:
       working-directory: tests/fixtures/rust-crate
       matrix: '[{"os": "ubuntu-latest", "target": "x86_64-unknown-linux-gnu"}]'
 
+  # Package selection override on the binary-only member: no library, so the doctest step
+  # must skip with a notice instead of failing.
+  no-lib:
+    name: no-lib
+    uses: ./.github/workflows/ci-rust.yml
+    with:
+      rust-version: "1.98.1"
+      package-args: -p ci-rust-fixture-cli
+      working-directory: tests/fixtures/rust-crate
+      matrix: '[{"os": "ubuntu-latest", "target": "x86_64-unknown-linux-gnu"}]'
+
   pipeline:
     name: pipeline
     uses: ./.github/workflows/pipeline.yml
@@ -45,7 +56,14 @@ jobs:
       rust: true
       rust-working-directory: tests/fixtures/rust-crate
       rust-matrix: '[{"os": "ubuntu-latest", "target": "x86_64-unknown-linux-gnu"}]'
+      rust-rust-version: "1.98.1"
+      rust-mise-install-args: ""
+      rust-clippy-args: --quiet
+      rust-timeout-minutes: 30
+      rust-cache-all-refs: true
       codeql-languages: '["actions"]'
+      semgrep-extra-args: --exclude tests/fixtures
+      snyk-args: --all-projects
     secrets:
       SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
 
