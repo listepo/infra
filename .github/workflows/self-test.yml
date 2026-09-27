@@ -1,0 +1,33 @@
+name: self-test
+
+# Runs ci-rust.yml against tests/fixtures/rust-crate, through both toolchain paths, so a
+# change to the reusable workflow is exercised before any caller pins it.
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: self-test-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  mise:
+    name: rust from mise.toml (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    uses: ./.github/workflows/ci-rust.yml
+    with:
+      runs-on: ${{ matrix.os }}
+      working-directory: tests/fixtures/rust-crate
+
+  rust-version:
+    name: rust from rust-version
+    uses: ./.github/workflows/ci-rust.yml
+    with:
+      rust-version: "1.98.1"
+      working-directory: tests/fixtures/rust-crate
