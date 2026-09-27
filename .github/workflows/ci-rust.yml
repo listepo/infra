@@ -1,22 +1,43 @@
 name: ci-rust
 
-# Reusable Rust CI: format check, clippy and cargo check.
+# Reusable Rust CI for listepo repositories.
 #
-# By default the Rust toolchain comes from the caller's mise.toml (listepo convention:
-# mise.toml is the single source of the Rust version). Pass `rust-version` to install an
-# exact toolchain through rustup instead.
+# - `fmt`: cargo fmt --check, once.
+# - `rust`: one job per entry of the shared target matrix (below, the `matrix` input):
+#   clippy (--all-targets --all-features), check, then the tests where the runner can run
+#   the target natively, or a build of every target where it cannot (cross targets).
+#
+# The Rust toolchain comes from the caller's mise.toml (listepo convention: mise.toml is
+# the single source of the Rust version). Pass `rust-version` to install an exact
+# toolchain through rustup instead. Either way the pinned version is exported as
+# RUSTUP_TOOLCHAIN and every job fails if `rustc --version` is anything else.
 on:
   workflow_call:
     inputs:
+      matrix:
+        description: >-
+          JSON array of matrix entries, each {"os": <runner label>, "target": <Rust target
+          triple>}, optionally with "test": false to build instead of test. The default is
+          the shared listepo matrix; pass a subset only when a target is not supported.
+        type: string
+        required: false
+        default: >-
+          [
+          {"os": "ubuntu-latest", "target": "x86_64-unknown-linux-gnu"},
+          {"os": "ubuntu-24.04-arm", "target": "aarch64-unknown-linux-gnu"},
+          {"os": "macos-latest", "target": "aarch64-apple-darwin"},
+          {"os": "macos-latest", "target": "x86_64-apple-darwin"},
+          {"os": "windows-latest", "target": "x86_64-pc-windows-msvc"}
+          ]
       rust-version:
         description: >-
-          Exact Rust toolchain (e.g. "1.97.1"). Empty (default) installs Rust from the
+          Exact Rust toolchain (e.g. "1.98.1"). Empty (default) installs Rust from the
           caller's mise.toml via jdx/mise-action.
         type: string
         required: false
         default: ""
-      runs-on:
-        description: Runner label for the job.
+      fmt-runs-on:
+        description: Runner label for the fmt job.
         type: string
         required: false
         default: ubuntu-latest
@@ -33,10 +54,44 @@ on:
         required: false
         default: rust
       clippy-args:
-        description: Extra arguments for cargo clippy, placed before `--`.
+        description: Extra arguments for cargo clippy and cargo check, placed before `--`.
         type: string
         required: false
         default: ""
+      tools:
+        description: >-
+          Comma-separated tools installed with taiki-e/install-action before the tests
+          (e.g. "nextest"). Empty installs nothing.
+        type: string
+        required: false
+        default: ""
+      setup-command:
+        description: >-
+          Bash run in every matrix job after the toolchain is installed and before clippy,
+          e.g. to install system packages. RUNNER_OS and TARGET are set.
+        type: string
+        required: false
+        default: ""
+      test-command:
+        description: >-
+          Bash that runs the tests on entries the runner can execute natively. Empty skips
+          the tests.
+        type: string
+        required: false
+        default: cargo test --all-targets --all-features
+      build-command:
+        description: >-
+          Bash that builds a cross target the runner cannot execute. TARGET is set.
+        type: string
+        required: false
+        default: cargo build --all-targets --all-features --target "$TARGET"
+      cache-all-refs:
+        description: >-
+          Save the Cargo cache on every ref, not only the default branch. For callers
+          whose CI runs only on pull requests, so a re-run of a pull request is warm.
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -45,9 +100,54 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  fmt:
+    name: fmt
+    runs-on: ${{ inputs.fmt-runs-on }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - if: inputs.rust-version == ''
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          working_directory: ${{ inputs.working-directory }}
+          install_args: ${{ inputs.mise-install-args }}
+
+      - name: Use the pinned Rust
+        env:
+          RUST_VERSION: ${{ inputs.rust-version }}
+        run: |
+          set -euo pipefail
+          if [ -n "$RUST_VERSION" ]; then
+            version="$RUST_VERSION"
+            rustup toolchain install "$version" --profile minimal --component rustfmt
+          else
+            version="$(mise current rust)"
+            [ -n "$version" ] || { echo "mise.toml pins no rust version" >&2; exit 1; }
+          fi
+          echo "RUSTUP_TOOLCHAIN=$version" >> "$GITHUB_ENV"
+          export RUSTUP_TOOLCHAIN="$version"
+          rustup component add rustfmt
+          rustc --version
+          rustc --version | grep -q "^rustc $version " \
+            || { echo "rustc is not the pinned Rust $version" >&2; exit 1; }
+
+      - run: cargo fmt --all --check
+
   rust:
-    name: fmt, clippy, check
-    runs-on: ${{ inputs.runs-on }}
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    env:
+      TARGET: ${{ matrix.target }}
     defaults:
       run:
         shell: bash
@@ -64,31 +164,84 @@ jobs:
           working_directory: ${{ inputs.working-directory }}
           install_args: ${{ inputs.mise-install-args }}
 
-      # Override path: an exact toolchain through rustup.
-      - if: inputs.rust-version != ''
+      # Make the pin the active toolchain for every later rustup/cargo call, add the
+      # target, and fail if rustc is anything else (e.g. the runner image's own stable).
+      # A target the runner cannot execute is a cross target: built, not tested.
+      - name: Use the pinned Rust and add the target
         env:
           RUST_VERSION: ${{ inputs.rust-version }}
+          TEST: ${{ matrix.test }}
         run: |
-          rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt,clippy
-          rustup default "$RUST_VERSION"
-
-      # mise.toml may omit `components`; make sure both tools exist either way.
-      - run: rustup component add rustfmt clippy
-
-      - run: rustc --version && cargo --version
+          set -euo pipefail
+          if [ -n "$RUST_VERSION" ]; then
+            version="$RUST_VERSION"
+            rustup toolchain install "$version" --profile minimal --component clippy
+          else
+            version="$(mise current rust)"
+            [ -n "$version" ] || { echo "mise.toml pins no rust version" >&2; exit 1; }
+          fi
+          echo "RUSTUP_TOOLCHAIN=$version" >> "$GITHUB_ENV"
+          export RUSTUP_TOOLCHAIN="$version"
+          # mise.toml may omit `components`; make sure clippy exists either way.
+          rustup component add clippy
+          rustup target add "$TARGET"
+          rustc --version
+          cargo --version
+          rustc --version | grep -q "^rustc $version " \
+            || { echo "rustc is not the pinned Rust $version" >&2; exit 1; }
+          host="$(rustc -vV | sed -n 's/^host: //p')"
+          if [ "$host" = "$TARGET" ]; then
+            echo "TARGET_ARGS=" >> "$GITHUB_ENV"
+            if [ "$TEST" = "false" ]; then native=false; else native=true; fi
+          else
+            echo "TARGET_ARGS=--target $TARGET" >> "$GITHUB_ENV"
+            native=false
+          fi
+          echo "NATIVE=$native" >> "$GITHUB_ENV"
+          echo "host $host, target $TARGET, tests run: $native"
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ${{ inputs.working-directory }} -> target
-          save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+          key: ${{ matrix.target }}
+          save-if: >-
+            ${{ inputs.cache-all-refs
+            || github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
 
-      - run: cargo fmt --all --check
+      - if: inputs.tools != ''
+        uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
+        with:
+          tool: ${{ inputs.tools }}
 
-      - env:
+      - name: Setup
+        if: inputs.setup-command != ''
+        env:
+          SETUP_COMMAND: ${{ inputs.setup-command }}
+        run: eval "$SETUP_COMMAND"
+
+      - name: clippy
+        env:
           CLIPPY_ARGS: ${{ inputs.clippy-args }}
         run: |
-          # CLIPPY_ARGS is split on whitespace on purpose.
+          # CLIPPY_ARGS and TARGET_ARGS are split on whitespace on purpose.
           # shellcheck disable=SC2086
-          cargo clippy --all-targets --all-features $CLIPPY_ARGS -- -D warnings
+          cargo clippy --all-targets --all-features $TARGET_ARGS $CLIPPY_ARGS -- -D warnings
 
-      - run: cargo check --all-targets
+      - name: check
+        env:
+          CLIPPY_ARGS: ${{ inputs.clippy-args }}
+        run: |
+          # shellcheck disable=SC2086
+          cargo check --all-targets $TARGET_ARGS $CLIPPY_ARGS
+
+      - name: test
+        if: env.NATIVE == 'true' && inputs.test-command != ''
+        env:
+          TEST_COMMAND: ${{ inputs.test-command }}
+        run: eval "$TEST_COMMAND"
+
+      - name: build (cross target, not run)
+        if: env.NATIVE != 'true' && inputs.build-command != ''
+        env:
+          BUILD_COMMAND: ${{ inputs.build-command }}
+        run: eval "$BUILD_COMMAND"

@@ -1,0 +1,11 @@
+# Smallest Cargo package self-test.yml runs ci-rust.yml against.
+[package]
+name = "ci-rust-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[features]
+extra = []
+
+[workspace]

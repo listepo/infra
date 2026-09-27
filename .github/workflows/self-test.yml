@@ -1,0 +1,30 @@
+name: self-test
+
+# Runs ci-rust.yml against tests/fixtures/rust-crate through both toolchain paths: the
+# default shared matrix with Rust from mise.toml, and a one-entry matrix with an exact
+# rust-version. A change to the reusable workflow is exercised before any caller pins it.
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: self-test-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  mise:
+    name: mise.toml
+    uses: ./.github/workflows/ci-rust.yml
+    with:
+      working-directory: tests/fixtures/rust-crate
+
+  rust-version:
+    name: rust-version
+    uses: ./.github/workflows/ci-rust.yml
+    with:
+      rust-version: "1.98.1"
+      working-directory: tests/fixtures/rust-crate
+      matrix: '[{"os": "ubuntu-latest", "target": "x86_64-unknown-linux-gnu"}]'
