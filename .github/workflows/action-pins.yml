@@ -1,0 +1,51 @@
+name: action-pins
+
+# Fails when any workflow or composite action uses an external action or reusable workflow
+# by a tag or branch instead of a full 40-character commit SHA. Local references
+# (`./...`, `$/...`) and `docker://` images pass.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: action-pins-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  action-pins:
+    name: action-pins
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check that external actions are pinned by SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          bad=0
+          while IFS= read -r line; do
+            file=${line%%:*}
+            rest=${line#*:}
+            lineno=${rest%%:*}
+            ref=$(sed -E "s/^[^:]*uses:[[:space:]]*//; s/[[:space:]]*#.*\$//; s/^[\"']//; s/[\"']\$//" <<<"${rest#*:}")
+            case "$ref" in
+              ./* | '$/'* | docker://*) continue ;;
+            esac
+            if [[ ! "$ref" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40}$ ]]; then
+              echo "::error file=${file},line=${lineno}::'${ref}' is not pinned to a full commit SHA"
+              bad=1
+            fi
+          done < <(grep -rnE '^[[:space:]]*-?[[:space:]]*uses:' .github/workflows .github/actions \
+            --include='*.yml' --include='*.yaml' || true)
+          if [[ "$bad" -ne 0 ]]; then
+            echo "Pin every external action to a full commit SHA, e.g. owner/repo@<sha> # vX.Y.Z"
+            exit 1
+          fi
+          echo "All external actions are pinned by SHA."

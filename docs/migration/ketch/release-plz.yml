@@ -1,0 +1,25 @@
+# .github/workflows/release-plz.yml — replaces ketch's 140-line local variant.
+name: release-plz
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  release-plz:
+    uses: listepo/infra/.github/workflows/release-plz.yml@<SHA> # main
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    with:
+      release-workflow: release.yml # dist's workflow, dispatched with -f tag=v<version>
+      verify-os: '["macos-latest", "ubuntu-latest", "windows-latest"]'
+      verify-command: |
+        cargo clippy --all-targets --all-features --locked -- -D warnings
+        cargo nextest run --all-targets --locked
+    secrets:
+      RELEASE_PLZ_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}

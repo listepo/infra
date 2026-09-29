@@ -1,0 +1,26 @@
+# .github/workflows/sync-docs.yml — identical in cox, ketch, rtok.
+name: sync-docs
+
+on:
+  push:
+    branches: [main]
+    paths: [docs/**, .github/workflows/sync-docs.yml]
+    tags: ["v*"]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+concurrency:
+  group: sync-docs
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    uses: listepo/infra/.github/workflows/sync-docs.yml@<SHA> # main
+    permissions:
+      contents: read
+    secrets:
+      SITE_DEPLOY_KEY: ${{ secrets.SITE_DEPLOY_KEY }}

@@ -1,0 +1,137 @@
+name: sync-docs
+
+# Publishes the caller's docs/ to the site repository (listepo/landing), the same job (parametrized) that
+# rtok, ketch and cox each carried as sync-docs.yml:
+#   - <docs-dir>/site.md (the project card) -> content/projects/<repo name>.md; on a v* tag or
+#     release its `version:` front matter is set from the tag (v1.2.3 -> "1.2.3").
+#   - every other <docs-dir>/**/*.md -> content/docs/<repo name>/ (mirrored, deletions too),
+#     plus _source.json (repo, commit, ref).
+# Auth: a write-enabled deploy key on the site repository only, passed as SITE_DEPLOY_KEY;
+# GITHUB_TOKEN stays read-only. The caller owns the triggers and the `concurrency` group
+# (`sync-docs`, never cancelled) because a callee group would be keyed on the caller anyway.
+#
+# Caller job permissions: contents: read.
+on:
+  workflow_call:
+    inputs:
+      docs-dir:
+        description: Directory with site.md and the pages to mirror.
+        type: string
+        required: false
+        default: docs
+      site-repository:
+        description: Site repository that receives the content.
+        type: string
+        required: false
+        default: listepo/landing
+      site-branch:
+        description: Branch of the site repository to push to.
+        type: string
+        required: false
+        default: main
+    secrets:
+      SITE_DEPLOY_KEY:
+        description: Private half of a write-enabled deploy key on the site repository.
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: source
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.site-repository }}
+          ref: ${{ inputs.site-branch }}
+          ssh-key: ${{ secrets.SITE_DEPLOY_KEY }}
+          path: site
+      - name: Copy docs/site.md into the site repository
+        env:
+          PROJECT: ${{ github.event.repository.name }}
+          DOCS_DIR: ${{ inputs.docs-dir }}
+          SITE_REPOSITORY: ${{ inputs.site-repository }}
+          SITE_BRANCH: ${{ inputs.site-branch }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          dest="site/content/projects/${PROJECT}.md"
+          mkdir -p "$(dirname "$dest")"
+          cp "source/$DOCS_DIR/site.md" "$dest"
+          if [ "$REF_TYPE" = "tag" ]; then
+            VERSION="${REF_NAME#v}" DEST="$dest" python3 - <<'PY'
+          import os, re
+          path, version = os.environ["DEST"], os.environ["VERSION"]
+          text = open(path, encoding="utf-8").read()
+          m = re.match(r"---\n(.*?\n)---\n", text, re.S)
+          if m:
+              fm = m.group(1)
+              line = f'version: "{version}"\n'
+              if re.search(r"^version:.*\n", fm, re.M):
+                  fm = re.sub(r"^version:.*\n", line, fm, count=1, flags=re.M)
+              else:
+                  fm += line
+              text = f"---\n{fm}---\n" + text[m.end():]
+              open(path, "w", encoding="utf-8").write(text)
+          PY
+          fi
+      - name: Mirror the other docs/**/*.md into the site repository
+        env:
+          PROJECT: ${{ github.event.repository.name }}
+          DOCS_DIR: ${{ inputs.docs-dir }}
+          SITE_REPOSITORY: ${{ inputs.site-repository }}
+          SITE_BRANCH: ${{ inputs.site-branch }}
+          SOURCE: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          dest="site/content/docs/${PROJECT}"
+          mkdir -p "$dest"
+          rsync -a --delete --delete-excluded --prune-empty-dirs \
+            --exclude='/site.md' \
+            --include='*/' --include='*.md' --exclude='*' \
+            "source/$DOCS_DIR/" "$dest/"
+          printf '{\n  "repo": "%s",\n  "sha": "%s",\n  "ref": "%s"\n}\n' \
+            "$SOURCE" "$SOURCE_SHA" "$REF_NAME" > "$dest/_source.json"
+      - name: Commit and push if changed
+        working-directory: site
+        env:
+          PROJECT: ${{ github.event.repository.name }}
+          DOCS_DIR: ${{ inputs.docs-dir }}
+          SITE_REPOSITORY: ${{ inputs.site-repository }}
+          SITE_BRANCH: ${{ inputs.site-branch }}
+          SOURCE: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git add "content/projects/${PROJECT}.md" "content/docs/${PROJECT}"
+          # _source.json alone changes on every run; only commit when content changed.
+          if git diff --cached --quiet -- . ":(exclude)content/docs/${PROJECT}/_source.json"; then
+            echo "content/projects/${PROJECT}.md and content/docs/${PROJECT}/ are already up to date"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "content: sync ${PROJECT} from ${SOURCE}@${SOURCE_SHA:0:7} (${REF_NAME})"
+          for attempt in 1 2 3 4 5; do
+            if git push origin "HEAD:$SITE_BRANCH"; then
+              echo "pushed $(git rev-parse HEAD) to $SITE_REPOSITORY $SITE_BRANCH"
+              exit 0
+            fi
+            echo "push rejected (attempt ${attempt}); rebasing onto the latest $SITE_BRANCH"
+            sleep $((attempt * 3))
+            git fetch origin "$SITE_BRANCH"
+            git rebase "origin/$SITE_BRANCH"
+          done
+          echo "::error::could not push to $SITE_REPOSITORY $SITE_BRANCH after 5 attempts"
+          exit 1

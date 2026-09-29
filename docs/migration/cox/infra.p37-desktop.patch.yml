@@ -1,0 +1,41 @@
+# PR #65 (p37-desktop): the same .github/infra.yml plus these changes.
+rust:
+  setup-command: |
+    if [ "$RUNNER_OS" = Linux ]; then bash .github/actions/bwrap/install.sh; fi
+    bash .github/actions/voice/install.sh
+sonarcloud:
+  setup-command: bash .github/actions/voice/install.sh
+jobs:   # append to the list above (lists are replaced, so the file carries the full list)
+  - name: windows
+    enabled: false # `if: false` today (P57)
+    runs-on: windows-latest
+    mise: rust
+    rust-pin: true
+    rust-cache: true
+    tools: just
+    run: just windows-check
+
+  - name: desktop-macos-lint
+    runs-on: macos-26
+    mise: aqua:realm/SwiftLint
+    run: bash scripts/desktop/lint.sh # move the inline swiftlint/swift-format block here
+
+  - name: desktop-macos
+    runs-on: macos-26
+    mise: rust
+    rust-pin: true
+    rust-cache: true
+    run: bash scripts/desktop/ci.sh # xcframework.sh + arm64 check + swift test + app.sh
+
+  - name: desktop-tokens
+    runs-on: ubuntu-24.04
+    mise: node
+    working-directory: desktop/design
+    run: |
+      npm ci --no-fund --no-audit
+      npm run build
+      if [ -n "$(git status --porcelain)" ]; then
+        git status --short; git diff
+        echo "generated tokens drifted: run \`just desktop-tokens\` and commit" >&2
+        exit 1
+      fi

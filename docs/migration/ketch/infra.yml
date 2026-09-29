@@ -1,0 +1,50 @@
+# .github/infra.yml — ketch.
+version: 1
+
+rust:
+  enabled: true # shared five-target matrix (Windows included)
+  clippy-args: --locked
+  tools: nextest
+  test-command: |
+    cargo nextest run --all-targets --locked
+    cargo nextest run --all-targets --locked --features tui
+  build-command: cargo build --all-targets --all-features --locked --target "$TARGET"
+
+codeql:
+  languages: [actions, javascript-typescript, python, rust]
+
+sonarcloud:
+  enabled: true
+  rust: true
+  mise-install-args: rust
+  coverage-command: cargo llvm-cov --locked --lcov --output-path coverage/lcov.info
+
+jobs:
+  - name: commits
+    events: [pull_request]
+    mise: node
+    fetch-depth: 0
+    run: bash scripts/commitlint-range.sh "origin/$GITHUB_BASE_REF" # the inline loop, moved to a script
+
+  - name: powershell
+    runs-on: windows-latest
+    mise: false
+    shell: pwsh
+    run: |
+      $errors = $null
+      $null = [System.Management.Automation.Language.Parser]::ParseFile('install.ps1', [ref]$null, [ref]$errors)
+      if ($errors) { $errors | Format-List *; exit 1 }
+      ./install.ps1 --help
+
+  - name: package
+    fetch-depth: 0
+    mise: rust cargo-dist git-cliff
+    rust-pin: true
+    rust-cache: true
+    matrix:
+      - {runs-on: macos-latest, target: aarch64-apple-darwin}
+      - {runs-on: ubuntu-latest, target: x86_64-unknown-linux-gnu}
+      - {runs-on: windows-latest, target: x86_64-pc-windows-msvc}
+    # shell syntax, dist-generate diff (Linux), dist build, tarball + install.sh + cask checks:
+    # today's inline steps, moved into a repository script.
+    run: bash scripts/ci-package.sh "$TARGET"

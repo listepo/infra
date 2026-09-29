@@ -1,0 +1,3 @@
+# .github/workflows/review.yml — kept local (ketch-only): `/review` comment re-dispatches CI.
+# Unchanged job body from today's ci.yml `review` job; only moved out so ci.yml has no
+# issue_comment trigger. Update `gh workflow run ci.yml` stays valid (same file name).
