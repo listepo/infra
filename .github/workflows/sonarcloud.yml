@@ -80,6 +80,7 @@ on:
         default: 60
     secrets:
       SONAR_TOKEN:
+        description: "SonarCloud token. Empty (unset, fork PRs, Dependabot runs) skips every step with a notice."
         required: false
 
 permissions:

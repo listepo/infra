@@ -44,7 +44,9 @@ jobs:
 See [docs/reusable-workflows.md](docs/reusable-workflows.md) for every workflow's inputs,
 secrets, required permissions and caller examples, [docs/index.md](docs/index.md) for
 ci-rust.yml details, and [docs/centralization-candidates.md](docs/centralization-candidates.md)
-for what else could move here.
+for what else could move here, [docs/consumers.md](docs/consumers.md) for
+who calls which workflow at which pin, and [docs/github-limits.md](docs/github-limits.md) for
+the GitHub constraints (with sources) that shape this repository.
 
 ## License
 

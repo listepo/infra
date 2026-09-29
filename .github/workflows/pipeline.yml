@@ -190,6 +190,7 @@ on:
         default: true
     secrets:
       SNYK_TOKEN:
+        description: "Snyk API token. Empty (unset, fork PRs, Dependabot runs) skips the Snyk job with a notice."
         required: false
     outputs:
       result:
@@ -287,6 +288,7 @@ jobs:
       always()
       && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       result: ${{ steps.done.outputs.result }}
     steps:

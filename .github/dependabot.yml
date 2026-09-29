@@ -1,0 +1,20 @@
+# Keeps the SHA pins of third-party actions used by infra's own reusable workflows and composite
+# actions current. Consumer repositories need their own copy (GitHub reads dependabot.yml only
+# from the repository itself); see docs/github-limits.md.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    # "/" covers .github/workflows; composite actions are listed explicitly.
+    directories:
+      - /
+      - /.github/actions/cancel-run
+      - /.github/actions/gate
+      - /.github/actions/macos-sign
+      - /.github/actions/revert-on-failure
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
