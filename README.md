@@ -19,8 +19,10 @@ Shared reusable GitHub workflows and build configs for listepo repositories
 | [`sonarcloud.yml`](.github/workflows/sonarcloud.yml) | SonarCloud scan, skipped without `SONAR_TOKEN` |
 
 Composite actions: [`gate`](.github/actions/gate/action.yml) (fail unless every needed job
-succeeded), [`revert-on-failure`](.github/actions/revert-on-failure/action.yml) and
-[`macos-sign`](.github/actions/macos-sign/action.yml). `self-test.yml` runs ci-rust.yml and pipeline.yml against a fixture crate.
+succeeded), [`revert-on-failure`](.github/actions/revert-on-failure/action.yml),
+[`macos-sign`](.github/actions/macos-sign/action.yml) and
+[`cancel-run`](.github/actions/cancel-run/action.yml) (cancel the whole run when a job fails).
+`self-test.yml` runs ci-rust.yml and pipeline.yml against a fixture crate.
 
 ## How to call
 
@@ -31,7 +33,7 @@ jobs:
     permissions:
       contents: read
       security-events: write
-      actions: read
+      actions: write
     with:
       rust: true
       codeql-languages: '["actions", "rust"]'

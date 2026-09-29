@@ -22,12 +22,18 @@ jobs:
   mise:
     name: mise.toml
     uses: ./.github/workflows/ci-rust.yml
+    permissions:
+      contents: read
+      actions: write # cancel-run on failure
     with:
       working-directory: tests/fixtures/rust-crate
 
   rust-version:
     name: rust-version
     uses: ./.github/workflows/ci-rust.yml
+    permissions:
+      contents: read
+      actions: write # cancel-run on failure
     with:
       rust-version: "1.98.1"
       msrv: "1.85"
@@ -39,6 +45,9 @@ jobs:
   no-lib:
     name: no-lib
     uses: ./.github/workflows/ci-rust.yml
+    permissions:
+      contents: read
+      actions: write # cancel-run on failure
     with:
       rust-version: "1.98.1"
       package-args: -p ci-rust-fixture-cli
@@ -51,7 +60,7 @@ jobs:
     permissions:
       contents: read
       security-events: write
-      actions: read
+      actions: write
     with:
       rust: true
       rust-working-directory: tests/fixtures/rust-crate
@@ -73,6 +82,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      actions: write
     with:
       rust: true
       project-base-dir: tests/fixtures/rust-crate

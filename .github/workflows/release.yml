@@ -14,7 +14,7 @@ name: release
 # Repositories released with cargo-dist keep dist's generated release.yml (dist refuses a
 # hand-edited one) and use release-plz.yml / verify from here; this workflow is for the rest.
 #
-# Caller job permissions: contents: write (tag + Release), checks: read, actions: read.
+# Caller job permissions: contents: write (tag + Release), checks: read, actions: write.
 # Secrets (all optional; a missing one skips its step with a notice, except where an input
 # explicitly asks for it): MACOS_CERTIFICATE (base64 .p12 Developer ID Application),
 # MACOS_CERTIFICATE_PWD; notarization with APPSTORE_CONNECT_KEY (+ _KEY_ID, _ISSUER_ID) or
@@ -23,6 +23,13 @@ name: release
 on:
   workflow_call:
     inputs:
+      cancel-run-on-failure:
+        description: >-
+          When a job fails, cancel the whole workflow run (every other running or queued
+          job, the caller's included). The calling job must grant `actions: write`.
+        type: boolean
+        required: false
+        default: true
       tag:
         description: Release tag, e.g. v1.2.3. A `-` suffix (v1.2.3-rc.1) marks a prerelease.
         type: string
@@ -181,6 +188,7 @@ on:
 
 permissions:
   contents: read
+  actions: write # cancel-run on failure
 
 env:
   CARGO_TERM_COLOR: always
@@ -191,6 +199,7 @@ jobs:
     permissions:
       contents: read
       checks: read
+      actions: write # cancel-run on failure
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
       prerelease: ${{ steps.tag.outputs.prerelease }}
@@ -257,12 +266,15 @@ jobs:
             fail=1
           fi
           exit "$fail"
+      - name: Cancel the run on failure
+        if: failure() && inputs.cancel-run-on-failure
+        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag
 
   verify:
     needs: checks
     if: inputs.verify-command != ''
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         os: ${{ fromJSON(inputs.verify-os) }}
     runs-on: ${{ matrix.os }}
@@ -286,6 +298,9 @@ jobs:
         env:
           VERIFY_COMMAND: ${{ inputs.verify-command }}
         run: eval "$VERIFY_COMMAND"
+      - name: Cancel the run on failure
+        if: failure() && inputs.cancel-run-on-failure
+        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag
 
   build:
     name: build ${{ matrix.target }}
@@ -294,7 +309,7 @@ jobs:
       !cancelled() && needs.checks.result == 'success'
       && (needs.verify.result == 'success' || needs.verify.result == 'skipped')
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include: ${{ fromJSON(inputs.build-matrix) }}
     runs-on: ${{ matrix.os }}
@@ -420,6 +435,9 @@ jobs:
           name: release-${{ matrix.target }}
           path: ${{ env.DIST_DIR }}
           if-no-files-found: error
+      - name: Cancel the run on failure
+        if: failure() && inputs.cancel-run-on-failure
+        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag
 
   release:
     needs: [checks, build]
@@ -427,6 +445,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: write # cancel-run on failure
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -466,6 +485,9 @@ jobs:
           if [ -n "${NOTES_FILE:-}" ]; then args+=(--notes-file "$NOTES_FILE")
           else args+=(--generate-notes); fi
           gh release create "$TAG" "${args[@]}" "${files[@]}"
+      - name: Cancel the run on failure
+        if: failure() && inputs.cancel-run-on-failure
+        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag
 
   publish:
     needs: [checks, release]
@@ -473,6 +495,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: write # cancel-run on failure
     defaults:
       run:
         shell: bash
@@ -503,3 +526,6 @@ jobs:
           PUBLISH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
           PUBLISH_COMMAND: ${{ inputs.publish-command }}
         run: eval "$PUBLISH_COMMAND"
+      - name: Cancel the run on failure
+        if: failure() && inputs.cancel-run-on-failure
+        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag

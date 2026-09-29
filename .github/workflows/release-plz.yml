@@ -18,6 +18,13 @@ name: release-plz
 on:
   workflow_call:
     inputs:
+      cancel-run-on-failure:
+        description: >-
+          When a job fails, cancel the whole workflow run (every other running or queued
+          job, the caller's included). The calling job must grant `actions: write`.
+        type: boolean
+        required: false
+        default: true
       tag-prefix:
         description: Tag prefix before the version, e.g. "v" or "my-crate-v".
         type: string
@@ -56,6 +63,7 @@ on:
 
 permissions:
   contents: read
+  actions: write # cancel-run on failure
 
 concurrency:
   group: release-plz-${{ github.repository }}
@@ -84,6 +92,9 @@ jobs:
           else
             echo "merged=false" >> "$GITHUB_OUTPUT"
           fi
+      - name: Cancel the run on failure
+        if: failure() && inputs.cancel-run-on-failure
+        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag
 
   release-pr:
     needs: detect
@@ -92,6 +103,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      actions: write # cancel-run on failure
     steps:
       - name: A token that gives the release PR its CI
         env:
@@ -130,12 +142,15 @@ jobs:
           command: release-pr
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+      - name: Cancel the run on failure
+        if: failure() && inputs.cancel-run-on-failure
+        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag
 
   verify:
     needs: detect
     if: needs.detect.outputs.merged == 'true' && inputs.verify-command != ''
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         os: ${{ fromJSON(inputs.verify-os) }}
     runs-on: ${{ matrix.os }}
@@ -153,6 +168,9 @@ jobs:
         env:
           VERIFY_COMMAND: ${{ inputs.verify-command }}
         run: eval "$VERIFY_COMMAND"
+      - name: Cancel the run on failure
+        if: failure() && inputs.cancel-run-on-failure
+        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag
 
   dispatch:
     needs: [detect, verify]
@@ -174,3 +192,6 @@ jobs:
         run: |
           gh workflow run "$WORKFLOW" -R "$GITHUB_REPOSITORY" --ref "$REF" -f "tag=$TAG"
           echo "::notice title=release::dispatched $WORKFLOW for $TAG on $REF"
+      - name: Cancel the run on failure
+        if: failure() && inputs.cancel-run-on-failure
+        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag

@@ -8,12 +8,19 @@ name: pipeline
 # Sibling workflows are referenced with `$/` (self-repository syntax), so they resolve to this
 # repository at the exact commit the caller pinned.
 #
-# Caller job permissions: contents: read, security-events: write, actions: read (plus whatever
-# the Rust CI needs; ci-rust.yml itself only reads).
+# Caller job permissions: contents: read, security-events: write, actions: write (cancel-run:
+# a failed job cancels the whole run; plus whatever the Rust CI needs).
 # Secrets: SNYK_TOKEN (optional). Pass it explicitly; `secrets: inherit` also works.
 on:
   workflow_call:
     inputs:
+      cancel-run-on-failure:
+        description: >-
+          When a job fails, cancel the whole workflow run (every other running or queued
+          job, the caller's included). The calling job must grant `actions: write`.
+        type: boolean
+        required: false
+        default: true
       rust:
         description: Run ci-rust.yml. Off for repositories whose CI is a local workflow.
         type: boolean
@@ -191,6 +198,7 @@ on:
 
 permissions:
   contents: read
+  actions: write # cancel-run on failure
 
 jobs:
   rust:
@@ -199,6 +207,7 @@ jobs:
       && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     uses: $/.github/workflows/ci-rust.yml
     with:
+      cancel-run-on-failure: ${{ inputs.cancel-run-on-failure }}
       matrix: ${{ inputs.rust-matrix }}
       rust-version: ${{ inputs.rust-rust-version }}
       fmt-runs-on: ${{ inputs.rust-fmt-runs-on }}
@@ -225,8 +234,9 @@ jobs:
     permissions:
       security-events: write
       contents: read
-      actions: read
+      actions: write
     with:
+      cancel-run-on-failure: ${{ inputs.cancel-run-on-failure }}
       languages: ${{ inputs.codeql-languages }}
       build-mode: ${{ inputs.codeql-build-mode }}
       queries: ${{ inputs.codeql-queries }}
@@ -243,8 +253,9 @@ jobs:
     permissions:
       security-events: write
       contents: read
-      actions: read
+      actions: write
     with:
+      cancel-run-on-failure: ${{ inputs.cancel-run-on-failure }}
       config: ${{ inputs.semgrep-config }}
       extra-args: ${{ inputs.semgrep-extra-args }}
       fail-on-findings: ${{ inputs.semgrep-fail-on-findings }}
@@ -258,8 +269,9 @@ jobs:
     permissions:
       security-events: write
       contents: read
-      actions: read
+      actions: write
     with:
+      cancel-run-on-failure: ${{ inputs.cancel-run-on-failure }}
       args: ${{ inputs.snyk-args }}
       monitor: ${{ inputs.snyk-monitor }}
       upload: ${{ inputs.upload-sarif }}
@@ -268,10 +280,11 @@ jobs:
 
   gate:
     needs: [rust, codeql, semgrep, snyk]
-    # !cancelled(): report failed, cancelled or skipped needs, but do not hold a cancelled run.
+    # always(): also runs (and fails) when the run was cancelled, e.g. by cancel-run after a
+    # failed job, so a required `gate` check is never left `skipped` (which counts as passed).
     # Skipped on draft PRs like every other job, so a draft never leaves a green `gate` behind.
     if: >-
-      !cancelled()
+      always()
       && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ubuntu-latest
     outputs:
@@ -302,3 +315,6 @@ jobs:
           skip-ok: ${{ steps.off.outputs.skip-ok }}
       - id: done
         run: echo "result=success" >> "$GITHUB_OUTPUT"
+      - name: Cancel the run on failure
+        if: failure() && !cancelled() && inputs.cancel-run-on-failure
+        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag

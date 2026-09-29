@@ -4,12 +4,19 @@ name: lint
 # ships shellcheck). Runs on this repository's own pull requests, and is reusable
 # (`workflow_call`) so any repository can lint its workflows the same way.
 #
-# Caller job permissions: contents: read.
+# Caller job permissions: contents: read, actions: write (cancel-run).
 on:
   pull_request:
   workflow_dispatch:
   workflow_call:
     inputs:
+      cancel-run-on-failure:
+        description: >-
+          When a job fails, cancel the whole workflow run (every other running or queued
+          job, the caller's included). The calling job must grant `actions: write`.
+        type: boolean
+        required: false
+        default: true
       actionlint-version:
         description: actionlint version, installed through mise.
         type: string
@@ -32,6 +39,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: write # cancel-run on failure
 
 jobs:
   actionlint:
@@ -58,3 +66,6 @@ jobs:
         env:
           EXTRA_COMMAND: ${{ inputs.extra-command }}
         run: eval "$EXTRA_COMMAND"
+      - name: Cancel the run on failure
+        if: failure() && inputs.cancel-run-on-failure
+        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag

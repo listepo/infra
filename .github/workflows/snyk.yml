@@ -8,10 +8,17 @@ name: snyk
 # Rust/Cargo: `snyk test` does not support Cargo projects, so `--all-projects` skips
 # Cargo.lock; Snyk covers npm, pub, Go, Python, NuGet and similar manifests.
 #
-# Caller job permissions: security-events: write, contents: read, actions: read.
+# Caller job permissions: security-events: write, contents: read, actions: write (cancel-run).
 on:
   workflow_call:
     inputs:
+      cancel-run-on-failure:
+        description: >-
+          When a job fails, cancel the whole workflow run (every other running or queued
+          job, the caller's included). The calling job must grant `actions: write`.
+        type: boolean
+        required: false
+        default: true
       args:
         description: Arguments for `snyk test` and `snyk monitor`.
         type: string
@@ -40,7 +47,7 @@ jobs:
     permissions:
       security-events: write
       contents: read
-      actions: read
+      actions: write # cancel-run on failure
     env:
       SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
       SNYK_ARGS: ${{ inputs.args }}
@@ -98,3 +105,6 @@ jobs:
           name: snyk-sarif
           path: snyk.sarif
           retention-days: 14
+      - name: Cancel the run on failure
+        if: failure() && inputs.cancel-run-on-failure
+        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag

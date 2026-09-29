@@ -29,13 +29,26 @@ Secrets (declared in each workflow's `on.workflow_call.secrets`):
 
 `permissions:` the calling job must grant:
 
-- `ci-rust.yml`, `lint.yml`: `contents: read`.
+- `ci-rust.yml`, `lint.yml`: `contents: read`, `actions: write`.
 - `codeql.yml`, `semgrep.yml`, `snyk.yml`, `pipeline.yml`: `contents: read`,
-  `security-events: write` (SARIF upload), `actions: read`.
+  `security-events: write` (SARIF upload), `actions: write`.
 - `release-plz.yml`: `contents: write`, `pull-requests: write`, `actions: write`.
-- `release.yml`: `contents: write` (tag + Release), `checks: read`, `actions: read`.
+- `release.yml`: `contents: write` (tag + Release), `checks: read`, `actions: write`.
 - `dependabot-automerge.yml`: `contents: write`, `pull-requests: write`, `actions: read`.
-- `sonarcloud.yml`: `contents: read`, `pull-requests: read`.
+- `sonarcloud.yml`: `contents: read`, `pull-requests: read`, `actions: write`.
+
+`actions: write` is for cancel-on-failure: every job of every workflow above except
+`dependabot-automerge.yml` ends with the `cancel-run` action under `if: failure()`, so the first
+failing job (a test, clippy, fmt, CodeQL, Semgrep, Snyk, SonarCloud, a release step) cancels
+the whole run at once: every other running or queued job, the caller's own jobs included
+(`github.run_id` inside a reusable workflow is the caller's run). Matrices use
+`fail-fast: true`. `pipeline.yml`'s `gate` runs with `always()`, so after such a cancel it
+fails instead of being skipped (a skipped required check counts as passed). A calling job that
+grants less than `actions: write` makes the run fail at startup (GitHub refuses a nested job
+that asks for more than its caller grants), even with the input off. Pass
+`cancel-run-on-failure: false` where a later job of the caller must still run after a failure,
+e.g. a Dependabot flow whose notify job reports a failed CI. `dependabot-automerge.yml` has no
+cancel step for the same reason: its `notify-failure` must run after `automerge` fails.
 
 Composite actions (reference them as `listepo/infra/.github/actions/<name>@<sha>`):
 
@@ -44,6 +57,7 @@ Composite actions (reference them as `listepo/infra/.github/actions/<name>@<sha>
 | `gate` | fail unless every job in a `needs` JSON succeeded (`skip-ok` lists allowed skips) |
 | `revert-on-failure` | revert a failed push, push the revert, open a draft re-apply PR |
 | `macos-sign` | Developer ID codesign (or identity discovery for cargo-dist) + notarization |
+| `cancel-run` | cancel the current workflow run (last step, `if: failure()`); `actions: write` |
 
 Private repositories: no scans (CodeQL, Semgrep, Snyk, SonarCloud) by listepo policy.
 
@@ -158,7 +172,7 @@ jobs:
     permissions:
       contents: read
       security-events: write
-      actions: read
+      actions: write
     with:
       rust: true
       codeql-languages: '["actions", "rust"]'
@@ -235,7 +249,7 @@ jobs:
     permissions:
       contents: write
       checks: read
-      actions: read
+      actions: write
     with:
       tag: ${{ inputs.tag }}
       dry-run: ${{ inputs.dry-run }}
@@ -347,6 +361,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      actions: write
     with:
       rust: true
       organization: listepo

@@ -1,0 +1,23 @@
+name: cancel-run
+description: >-
+  Cancel the current workflow run: every other running or queued job, the caller's jobs
+  included (inside a reusable workflow `github.run_id` is the caller's run). Use it as the last
+  step of a job with `if: failure()`. Needs `actions: write` on the job; without it the step
+  only warns.
+runs:
+  using: composite
+  steps:
+    # JavaScript, not `gh`: it also runs in container jobs without gh or bash (Semgrep).
+    - name: Cancel the workflow run
+      if: ${{ !cancelled() }}
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      with:
+        script: |
+          const runId = context.runId;
+          try {
+            await github.rest.actions.cancelWorkflowRun({ ...context.repo, run_id: runId });
+            core.notice(`A job failed; cancelling run ${runId} (every other job).`);
+          } catch (e) {
+            // 409: the run is already completing or cancelled; 403: no `actions: write`.
+            core.warning(`Could not cancel run ${runId}: ${e.status} ${e.message}`);
+          }

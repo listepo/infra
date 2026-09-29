@@ -9,11 +9,18 @@ name: sonarcloud
 # / `project-key` inputs. Rust callers set `rust: true` for LCOV coverage via cargo-llvm-cov
 # (coverage/lcov.info; point sonar.rust.lcov.reportPaths or similar at it).
 #
-# Caller job permissions: contents: read, pull-requests: read.
+# Caller job permissions: contents: read, pull-requests: read, actions: write (cancel-run).
 # Public repositories only (listepo policy: no scans on private repositories).
 on:
   workflow_call:
     inputs:
+      cancel-run-on-failure:
+        description: >-
+          When a job fails, cancel the whole workflow run (every other running or queued
+          job, the caller's included). The calling job must grant `actions: write`.
+        type: boolean
+        required: false
+        default: true
       organization:
         description: SonarCloud organization key (-Dsonar.organization). Empty uses properties.
         type: string
@@ -89,6 +96,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      actions: write # cancel-run on failure
     env:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
     steps:
@@ -181,3 +189,6 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: https://sonarcloud.io
           GITHUB_TOKEN: ${{ github.token }}
+      - name: Cancel the run on failure
+        if: failure() && inputs.cancel-run-on-failure
+        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag

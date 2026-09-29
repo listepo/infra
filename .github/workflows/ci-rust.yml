@@ -13,9 +13,19 @@ name: ci-rust
 # the single source of the Rust version). Pass `rust-version` to install an exact
 # toolchain through rustup instead. Either way the pinned version is exported as
 # RUSTUP_TOOLCHAIN and every job fails if `rustc --version` is anything else.
+#
+# A failed job cancels the whole run (`cancel-run-on-failure`, on by default).
+# Caller job permissions: contents: read, actions: write.
 on:
   workflow_call:
     inputs:
+      cancel-run-on-failure:
+        description: >-
+          When a job fails, cancel the whole workflow run (every other running or queued
+          job, the caller's included). The calling job must grant `actions: write`.
+        type: boolean
+        required: false
+        default: true
       matrix:
         description: >-
           JSON array of matrix entries, each {"os": <runner label>, "target": <Rust target
@@ -132,6 +142,7 @@ on:
 
 permissions:
   contents: read
+  actions: write # cancel-run on failure
 
 env:
   CARGO_TERM_COLOR: always
@@ -160,6 +171,9 @@ jobs:
           set -euo pipefail
           m="${INPUT_MATRIX:-$SHARED_MATRIX}"
           echo "matrix=$(jq -c . <<<"$m")" >> "$GITHUB_OUTPUT"
+      - name: Cancel the run on failure
+        if: failure() && inputs.cancel-run-on-failure
+        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag
 
   fmt:
     name: fmt
@@ -200,12 +214,15 @@ jobs:
             || { echo "rustc is not the pinned Rust $version" >&2; exit 1; }
 
       - run: cargo fmt --all --check
+      - name: Cancel the run on failure
+        if: failure() && inputs.cancel-run-on-failure
+        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag
 
   rust:
     name: ${{ matrix.target }}
     needs: plan
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
@@ -330,6 +347,9 @@ jobs:
           BUILD_COMMAND: ${{ inputs.build-command }}
           FEATURE_ARGS: ${{ inputs.feature-args }}
         run: eval "$BUILD_COMMAND"
+      - name: Cancel the run on failure
+        if: failure() && inputs.cancel-run-on-failure
+        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag
 
   msrv:
     # Static: GitHub shows the raw expression in the name of a skipped job.
@@ -368,3 +388,6 @@ jobs:
           FEATURE_ARGS: ${{ inputs.feature-args }}
           MSRV_COMMAND: ${{ inputs.msrv-command }}
         run: eval "$MSRV_COMMAND"
+      - name: Cancel the run on failure
+        if: failure() && inputs.cancel-run-on-failure
+        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag
