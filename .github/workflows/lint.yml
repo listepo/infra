@@ -1,16 +1,45 @@
 name: lint
 
-# Lints this repository's own workflows with actionlint (version pinned in mise.toml).
+# Lints GitHub Actions workflows with actionlint (shellcheck runs inside it; the runner image
+# ships shellcheck). Runs on this repository's own pull requests, and is reusable
+# (`workflow_call`) so any repository can lint its workflows the same way.
+#
+# Caller job permissions: contents: read, actions: write (cancel-run).
 on:
   pull_request:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      cancel-run-on-failure:
+        description: >-
+          When a job fails, cancel the whole workflow run (every other running or queued
+          job, the caller's included). The calling job must grant `actions: write`.
+        type: boolean
+        required: false
+        default: true
+      actionlint-version:
+        description: actionlint version, installed through mise.
+        type: string
+        required: false
+        default: 1.7.12
+      args:
+        description: Extra actionlint arguments, e.g. "-ignore 'SC2086'".
+        type: string
+        required: false
+        default: ""
+      extra-command:
+        description: Bash run after actionlint (e.g. yamllint, typos, taplo). Empty skips.
+        type: string
+        required: false
+        default: ""
 
 concurrency:
-  group: lint-${{ github.ref }}
+  group: lint-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
+  actions: write # cancel-run on failure
 
 jobs:
   actionlint:
@@ -19,5 +48,24 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # install_args pins the tool without reading the caller's mise.toml. Outside
+      # workflow_call the inputs are empty; the fallback matches this repository's mise.toml.
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
-      - run: actionlint -color
+        with:
+          install_args: actionlint@${{ inputs.actionlint-version || '1.7.12' }}
+      - name: actionlint
+        env:
+          VERSION: ${{ inputs.actionlint-version || '1.7.12' }}
+          ARGS: ${{ inputs.args }}
+        run: |
+          # ARGS is split on whitespace on purpose.
+          # shellcheck disable=SC2086
+          mise exec "actionlint@$VERSION" -- actionlint -color $ARGS
+      - name: Extra lint
+        if: inputs.extra-command != ''
+        env:
+          EXTRA_COMMAND: ${{ inputs.extra-command }}
+        run: eval "$EXTRA_COMMAND"
+      - name: Cancel the run on failure
+        if: failure() && inputs.cancel-run-on-failure
+        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag

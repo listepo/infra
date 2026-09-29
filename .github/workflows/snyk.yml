@@ -1,0 +1,110 @@
+name: snyk
+
+# Reusable Snyk Open Source dependency scan with the free Snyk CLI. Results go to the Security
+# tab (Code scanning, category `snyk`); findings never fail the job.
+#
+# Secret SNYK_TOKEN is optional: without it every step is skipped with a notice and the job
+# succeeds, so a gate stays green until the token is added.
+# Rust/Cargo: `snyk test` does not support Cargo projects, so `--all-projects` skips
+# Cargo.lock; Snyk covers npm, pub, Go, Python, NuGet and similar manifests.
+#
+# Caller job permissions: security-events: write, contents: read, actions: write (cancel-run).
+on:
+  workflow_call:
+    inputs:
+      cancel-run-on-failure:
+        description: >-
+          When a job fails, cancel the whole workflow run (every other running or queued
+          job, the caller's included). The calling job must grant `actions: write`.
+        type: boolean
+        required: false
+        default: true
+      args:
+        description: Arguments for `snyk test` and `snyk monitor`.
+        type: string
+        required: false
+        default: --all-projects
+      monitor:
+        description: Run `snyk monitor` on pushes to the default branch.
+        type: boolean
+        required: false
+        default: true
+      upload:
+        description: Upload the SARIF to code scanning; false keeps it as an artifact.
+        type: boolean
+        required: false
+        default: true
+    secrets:
+      SNYK_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+      actions: write # cancel-run on failure
+    env:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      SNYK_ARGS: ${{ inputs.args }}
+    steps:
+      - name: Check for SNYK_TOKEN
+        id: token
+        run: |
+          if [ -z "$SNYK_TOKEN" ]; then
+            echo "::notice title=snyk skipped::SNYK_TOKEN secret is not set; Snyk scan skipped."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.token.outputs.present == 'true'
+        with:
+          persist-credentials: false
+      - uses: snyk/actions/setup@9adf32b1121593767fc3c057af55b55db032dc04 # v1.0.0
+        if: steps.token.outputs.present == 'true'
+      # Exit 1 = vulnerabilities found (reported, not enforced); 2/3 = scan error or no
+      # supported manifest (warned, not enforced).
+      - name: Snyk test
+        if: steps.token.outputs.present == 'true'
+        run: |
+          code=0
+          # shellcheck disable=SC2086
+          snyk test $SNYK_ARGS --sarif-file-output=snyk.sarif || code=$?
+          case "$code" in
+            0) ;;
+            1) echo "::notice title=snyk::Vulnerable dependencies found; see code scanning." ;;
+            *) echo "::warning title=snyk::snyk test exited $code; not failing the job." ;;
+          esac
+      - name: Snyk monitor
+        if: >-
+          steps.token.outputs.present == 'true' && inputs.monitor
+          && github.event_name == 'push'
+          && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        run: |
+          code=0
+          # shellcheck disable=SC2086
+          snyk monitor $SNYK_ARGS || code=$?
+          if [ "$code" != 0 ]; then echo "::warning title=snyk::snyk monitor exited $code"; fi
+      - uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        if: >-
+          steps.token.outputs.present == 'true' && inputs.upload
+          && hashFiles('snyk.sarif') != ''
+        with:
+          sarif_file: snyk.sarif
+          category: snyk
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: >-
+          steps.token.outputs.present == 'true' && !inputs.upload
+          && hashFiles('snyk.sarif') != ''
+        with:
+          name: snyk-sarif
+          path: snyk.sarif
+          retention-days: 14
+      - name: Cancel the run on failure
+        if: failure() && inputs.cancel-run-on-failure
+        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag

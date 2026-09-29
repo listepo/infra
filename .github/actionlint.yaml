@@ -1,0 +1,7 @@
+# actionlint 1.7.12 predates GitHub's self-repository syntax (`uses: $/...`, July 2026), which
+# pipeline.yml and release.yml use to call sibling workflows and actions at the pinned commit.
+paths:
+  .github/workflows/*.yml:
+    ignore:
+      - 'reusable workflow call "\$/\.github/workflows/'
+      - 'specifying action "\$/\.github/actions/'

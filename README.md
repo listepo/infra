@@ -7,20 +7,44 @@ Shared reusable GitHub workflows and build configs for listepo repositories
 
 | Workflow | Purpose |
 | --- | --- |
-| [`ci-rust.yml`](.github/workflows/ci-rust.yml) | Rust CI: `cargo fmt --check` once, then `cargo clippy -D warnings`, `cargo check` and tests on a shared matrix of five targets (Linux x86_64/aarch64, macOS aarch64/x86_64, Windows x86_64), with a check that `rustc` is the pinned version. Rust comes from the caller's `mise.toml` unless `rust-version` is set. |
+| [`ci-rust.yml`](.github/workflows/ci-rust.yml) | Rust CI: fmt, clippy, check, tests on a shared five-target matrix, optional MSRV |
+| [`lint.yml`](.github/workflows/lint.yml) | actionlint (+ shellcheck) on the caller's workflows |
+| [`codeql.yml`](.github/workflows/codeql.yml) | CodeQL code scanning per language |
+| [`semgrep.yml`](.github/workflows/semgrep.yml) | Semgrep OSS scan, SARIF to code scanning |
+| [`snyk.yml`](.github/workflows/snyk.yml) | Snyk Open Source scan, skipped without `SNYK_TOKEN` |
+| [`pipeline.yml`](.github/workflows/pipeline.yml) | ci-rust + CodeQL + Semgrep + Snyk in parallel behind a `gate` |
+| [`release-plz.yml`](.github/workflows/release-plz.yml) | release PR, then verify + dispatch of the release workflow |
+| [`release.yml`](.github/workflows/release.yml) | manual release: checks, verify, build, sign, smoke, Release, publish |
+| [`dependabot-automerge.yml`](.github/workflows/dependabot-automerge.yml) | merge allowed Dependabot updates after green CI |
+| [`sonarcloud.yml`](.github/workflows/sonarcloud.yml) | SonarCloud scan, skipped without `SONAR_TOKEN` |
 
-`lint.yml` and `self-test.yml` are internal: actionlint on this repository's own workflows,
-and `ci-rust.yml` run against a fixture crate.
+Composite actions: [`gate`](.github/actions/gate/action.yml) (fail unless every needed job
+succeeded), [`revert-on-failure`](.github/actions/revert-on-failure/action.yml),
+[`macos-sign`](.github/actions/macos-sign/action.yml) and
+[`cancel-run`](.github/actions/cancel-run/action.yml) (cancel the whole run when a job fails).
+`self-test.yml` runs ci-rust.yml and pipeline.yml against a fixture crate.
 
 ## How to call
 
 ```yaml
 jobs:
-  rust:
-    uses: listepo/infra/.github/workflows/ci-rust.yml@<full commit sha>
+  pipeline:
+    uses: listepo/infra/.github/workflows/pipeline.yml@<full commit sha>
+    permissions:
+      contents: read
+      security-events: write
+      actions: write
+    with:
+      rust: true
+      codeql-languages: '["actions", "rust"]'
+    secrets:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
 ```
 
-See [docs/index.md](docs/index.md) for inputs, pinning and secrets.
+See [docs/reusable-workflows.md](docs/reusable-workflows.md) for every workflow's inputs,
+secrets, required permissions and caller examples, [docs/index.md](docs/index.md) for
+ci-rust.yml details, and [docs/centralization-candidates.md](docs/centralization-candidates.md)
+for what else could move here.
 
 ## License
 

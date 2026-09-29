@@ -5,7 +5,7 @@
 Two jobs:
 
 - `fmt`: `cargo fmt --all --check`, once.
-- `rust`: one job per entry of the shared target matrix, `fail-fast: false`. Each runs
+- `rust`: one job per entry of the shared target matrix, `fail-fast: true`. Each runs
   `cargo clippy --all-targets --all-features -- -D warnings` and `cargo check --all-targets`
   for its target, then the tests (`test-command`) when the runner executes the target
   natively, or a build of every target (`build-command`) when it does not.

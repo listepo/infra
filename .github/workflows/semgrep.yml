@@ -1,0 +1,84 @@
+name: semgrep
+
+# Reusable Semgrep scan with the free open-source CLI (no Semgrep account or token). Results go
+# to the Security tab (Code scanning, category `semgrep`). Findings do not fail the job unless
+# `fail-on-findings` is true, so by default this reports and never blocks.
+#
+# Caller job permissions: security-events: write, contents: read, actions: write (cancel-run).
+# Private repositories on the Free plan: pass `upload: false` (SARIF kept as an artifact).
+on:
+  workflow_call:
+    inputs:
+      cancel-run-on-failure:
+        description: >-
+          When a job fails, cancel the whole workflow run (every other running or queued
+          job, the caller's included). The calling job must grant `actions: write`.
+        type: boolean
+        required: false
+        default: true
+      config:
+        description: Semgrep --config value(s), space-separated (registry rulesets or paths).
+        type: string
+        required: false
+        default: p/default
+      extra-args:
+        description: Extra arguments for `semgrep scan`, e.g. "--exclude tests/fixtures".
+        type: string
+        required: false
+        default: ""
+      fail-on-findings:
+        description: Pass --error, so any finding fails the job.
+        type: boolean
+        required: false
+        default: false
+      upload:
+        description: Upload the SARIF to code scanning; false keeps it as an artifact.
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+      actions: write # cancel-run on failure
+    container:
+      # semgrep/semgrep:1.177.0
+      image: semgrep/semgrep@sha256:acaac22ffc7b7cc5926de0751b223bce0b2491c33d18422fa72f632c78d81198
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Metrics off since no account is used.
+      - name: Semgrep scan
+        env:
+          CONFIGS: ${{ inputs.config }}
+          EXTRA_ARGS: ${{ inputs.extra-args }}
+          FAIL: ${{ inputs.fail-on-findings }}
+        run: |
+          set -eu
+          args=""
+          for c in $CONFIGS; do args="$args --config $c"; done
+          if [ "$FAIL" = "true" ]; then args="$args --error"; fi
+          # args and EXTRA_ARGS are split on whitespace on purpose.
+          # shellcheck disable=SC2086
+          semgrep scan $args $EXTRA_ARGS --sarif --output semgrep.sarif --metrics off
+      - uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        if: always() && inputs.upload && hashFiles('semgrep.sarif') != ''
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && !inputs.upload && hashFiles('semgrep.sarif') != ''
+        with:
+          name: semgrep-sarif
+          path: semgrep.sarif
+          retention-days: 14
+      - name: Cancel the run on failure
+        if: failure() && inputs.cancel-run-on-failure
+        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag

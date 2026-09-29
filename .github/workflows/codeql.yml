@@ -1,0 +1,108 @@
+name: codeql
+
+# Reusable CodeQL code scanning. One analysis job per language; results go to the Security tab
+# (Code scanning, category /language:<lang>). Keep the repository's CodeQL "default setup" off:
+# GitHub rejects advanced-workflow uploads while it is on.
+#
+# Caller job permissions: security-events: write, contents: read, actions: write (cancel-run).
+# Private repositories on the Free plan have no code scanning (it needs GitHub Code Security);
+# pass `upload: false` there and the SARIF is kept as a workflow artifact instead.
+on:
+  workflow_call:
+    inputs:
+      cancel-run-on-failure:
+        description: >-
+          When a job fails, cancel the whole workflow run (every other running or queued
+          job, the caller's included). The calling job must grant `actions: write`.
+        type: boolean
+        required: false
+        default: true
+      languages:
+        description: >-
+          JSON array of CodeQL languages, e.g. '["actions", "rust"]'. Valid: actions, c-cpp,
+          csharp, go, java-kotlin, javascript-typescript, python, ruby, rust, swift.
+        type: string
+        required: false
+        default: '["actions"]'
+      build-mode:
+        description: >-
+          CodeQL build mode for every language: none (extract from source), autobuild or
+          manual. manual runs `build-command` between init and analyze.
+        type: string
+        required: false
+        default: none
+      build-command:
+        description: Bash run between init and analyze when build-mode is manual.
+        type: string
+        required: false
+        default: ""
+      queries:
+        description: CodeQL query suite (security-extended, security-and-quality, or a path).
+        type: string
+        required: false
+        default: security-and-quality
+      config-file:
+        description: Optional path to a CodeQL config file in the caller repository.
+        type: string
+        required: false
+        default: ""
+      runs-on:
+        description: Runner label.
+        type: string
+        required: false
+        default: ubuntu-latest
+      upload:
+        description: >-
+          Upload results to code scanning. false keeps the SARIF as an artifact (private
+          repositories without GitHub Code Security).
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: ${{ matrix.language }}
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      security-events: write
+      contents: read
+      actions: write # cancel-run on failure
+    strategy:
+      fail-fast: true
+      matrix:
+        language: ${{ fromJSON(inputs.languages) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ inputs.build-mode }}
+          queries: ${{ inputs.queries }}
+          config-file: ${{ inputs.config-file }}
+      - name: Build
+        if: inputs.build-mode == 'manual'
+        shell: bash
+        env:
+          BUILD_COMMAND: ${{ inputs.build-command }}
+        run: |
+          [ -n "$BUILD_COMMAND" ] || { echo "build-mode manual needs build-command" >&2; exit 1; }
+          eval "$BUILD_COMMAND"
+      - uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          category: /language:${{ matrix.language }}
+          upload: ${{ inputs.upload && 'always' || 'never' }}
+          output: codeql-sarif
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ !inputs.upload }}
+        with:
+          name: codeql-${{ matrix.language }}-sarif
+          path: codeql-sarif
+          retention-days: 14
+      - name: Cancel the run on failure
+        if: failure() && inputs.cancel-run-on-failure
+        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag

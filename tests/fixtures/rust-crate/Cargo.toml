@@ -9,3 +9,5 @@ publish = false
 extra = []
 
 [workspace]
+# A member next to the root package: ci-rust.yml must lint and test it too (--workspace).
+members = ["cli"]

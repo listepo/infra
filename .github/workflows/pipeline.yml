@@ -1,0 +1,320 @@
+name: pipeline
+
+# Reusable gated pipeline: Rust CI (optional), CodeQL, Semgrep and Snyk run in parallel as
+# reusable workflows of this repository; `gate` passes only when every enabled job finished
+# with `success` (failure, cancelled or skipped fail it). Callers make release/deploy jobs
+# `needs:` this job. Draft pull requests skip every job, the gate included.
+#
+# Sibling workflows are referenced with `$/` (self-repository syntax), so they resolve to this
+# repository at the exact commit the caller pinned.
+#
+# Caller job permissions: contents: read, security-events: write, actions: write (cancel-run:
+# a failed job cancels the whole run; plus whatever the Rust CI needs).
+# Secrets: SNYK_TOKEN (optional). Pass it explicitly; `secrets: inherit` also works.
+on:
+  workflow_call:
+    inputs:
+      cancel-run-on-failure:
+        description: >-
+          When a job fails, cancel the whole workflow run (every other running or queued
+          job, the caller's included). The calling job must grant `actions: write`.
+        type: boolean
+        required: false
+        default: true
+      rust:
+        description: Run ci-rust.yml. Off for repositories whose CI is a local workflow.
+        type: boolean
+        required: false
+        default: false
+      rust-matrix:
+        description: ci-rust.yml `matrix` (JSON). Empty uses the shared matrix.
+        type: string
+        required: false
+        default: ""
+      rust-rust-version:
+        description: ci-rust.yml `rust-version` (empty uses Rust from mise.toml).
+        type: string
+        required: false
+        default: ""
+      rust-fmt-runs-on:
+        description: ci-rust.yml `fmt-runs-on`.
+        type: string
+        required: false
+        default: ubuntu-latest
+      rust-working-directory:
+        description: ci-rust.yml `working-directory`.
+        type: string
+        required: false
+        default: "."
+      rust-mise-install-args:
+        description: ci-rust.yml `mise-install-args`.
+        type: string
+        required: false
+        default: rust
+      rust-clippy-args:
+        description: ci-rust.yml `clippy-args`.
+        type: string
+        required: false
+        default: ""
+      rust-tools:
+        description: ci-rust.yml `tools`.
+        type: string
+        required: false
+        default: ""
+      rust-setup-command:
+        description: ci-rust.yml `setup-command`.
+        type: string
+        required: false
+        default: ""
+      rust-test-command:
+        description: ci-rust.yml `test-command`.
+        type: string
+        required: false
+        default: cargo test $PACKAGE_ARGS --all-targets $FEATURE_ARGS
+      rust-doc-tests:
+        description: ci-rust.yml `doc-tests`.
+        type: boolean
+        required: false
+        default: true
+      rust-build-command:
+        description: ci-rust.yml `build-command`.
+        type: string
+        required: false
+        default: cargo build $PACKAGE_ARGS --all-targets $FEATURE_ARGS --target "$TARGET"
+      rust-package-args:
+        description: ci-rust.yml `package-args`.
+        type: string
+        required: false
+        default: --workspace
+      rust-feature-args:
+        description: ci-rust.yml `feature-args`.
+        type: string
+        required: false
+        default: --all-features
+      rust-msrv:
+        description: ci-rust.yml `msrv` (empty skips the MSRV job).
+        type: string
+        required: false
+        default: ""
+      rust-msrv-command:
+        description: ci-rust.yml `msrv-command`.
+        type: string
+        required: false
+        default: cargo check $PACKAGE_ARGS --all-targets $FEATURE_ARGS
+      rust-timeout-minutes:
+        description: ci-rust.yml `timeout-minutes`.
+        type: number
+        required: false
+        default: 60
+      rust-cache-all-refs:
+        description: ci-rust.yml `cache-all-refs`.
+        type: boolean
+        required: false
+        default: false
+      codeql:
+        description: Run codeql.yml.
+        type: boolean
+        required: false
+        default: true
+      codeql-languages:
+        description: codeql.yml `languages` (JSON array).
+        type: string
+        required: false
+        default: '["actions"]'
+      codeql-build-mode:
+        description: codeql.yml `build-mode`.
+        type: string
+        required: false
+        default: none
+      codeql-queries:
+        description: codeql.yml `queries`.
+        type: string
+        required: false
+        default: security-and-quality
+      codeql-build-command:
+        description: codeql.yml `build-command` (build-mode manual).
+        type: string
+        required: false
+        default: ""
+      codeql-config-file:
+        description: codeql.yml `config-file`.
+        type: string
+        required: false
+        default: ""
+      codeql-runs-on:
+        description: codeql.yml `runs-on`.
+        type: string
+        required: false
+        default: ubuntu-latest
+      semgrep:
+        description: Run semgrep.yml.
+        type: boolean
+        required: false
+        default: true
+      semgrep-config:
+        description: semgrep.yml `config`.
+        type: string
+        required: false
+        default: p/default
+      semgrep-extra-args:
+        description: semgrep.yml `extra-args`.
+        type: string
+        required: false
+        default: ""
+      semgrep-fail-on-findings:
+        description: semgrep.yml `fail-on-findings`.
+        type: boolean
+        required: false
+        default: false
+      snyk:
+        description: Run snyk.yml (skips itself without SNYK_TOKEN).
+        type: boolean
+        required: false
+        default: true
+      snyk-args:
+        description: snyk.yml `args`.
+        type: string
+        required: false
+        default: --all-projects
+      snyk-monitor:
+        description: snyk.yml `monitor`.
+        type: boolean
+        required: false
+        default: true
+      upload-sarif:
+        description: >-
+          Upload CodeQL/Semgrep/Snyk results to code scanning. false for private repositories
+          without GitHub Code Security (SARIF kept as artifacts).
+        type: boolean
+        required: false
+        default: true
+    secrets:
+      SNYK_TOKEN:
+        required: false
+    outputs:
+      result:
+        description: "`success` when the gate passed."
+        value: ${{ jobs.gate.outputs.result }}
+
+permissions:
+  contents: read
+  actions: write # cancel-run on failure
+
+jobs:
+  rust:
+    if: >-
+      inputs.rust
+      && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    uses: $/.github/workflows/ci-rust.yml
+    with:
+      cancel-run-on-failure: ${{ inputs.cancel-run-on-failure }}
+      matrix: ${{ inputs.rust-matrix }}
+      rust-version: ${{ inputs.rust-rust-version }}
+      fmt-runs-on: ${{ inputs.rust-fmt-runs-on }}
+      working-directory: ${{ inputs.rust-working-directory }}
+      mise-install-args: ${{ inputs.rust-mise-install-args }}
+      clippy-args: ${{ inputs.rust-clippy-args }}
+      tools: ${{ inputs.rust-tools }}
+      setup-command: ${{ inputs.rust-setup-command }}
+      test-command: ${{ inputs.rust-test-command }}
+      doc-tests: ${{ inputs.rust-doc-tests }}
+      build-command: ${{ inputs.rust-build-command }}
+      package-args: ${{ inputs.rust-package-args }}
+      feature-args: ${{ inputs.rust-feature-args }}
+      msrv: ${{ inputs.rust-msrv }}
+      msrv-command: ${{ inputs.rust-msrv-command }}
+      timeout-minutes: ${{ inputs.rust-timeout-minutes }}
+      cache-all-refs: ${{ inputs.rust-cache-all-refs }}
+
+  codeql:
+    if: >-
+      inputs.codeql
+      && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    uses: $/.github/workflows/codeql.yml
+    permissions:
+      security-events: write
+      contents: read
+      actions: write
+    with:
+      cancel-run-on-failure: ${{ inputs.cancel-run-on-failure }}
+      languages: ${{ inputs.codeql-languages }}
+      build-mode: ${{ inputs.codeql-build-mode }}
+      queries: ${{ inputs.codeql-queries }}
+      build-command: ${{ inputs.codeql-build-command }}
+      config-file: ${{ inputs.codeql-config-file }}
+      runs-on: ${{ inputs.codeql-runs-on }}
+      upload: ${{ inputs.upload-sarif }}
+
+  semgrep:
+    if: >-
+      inputs.semgrep
+      && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    uses: $/.github/workflows/semgrep.yml
+    permissions:
+      security-events: write
+      contents: read
+      actions: write
+    with:
+      cancel-run-on-failure: ${{ inputs.cancel-run-on-failure }}
+      config: ${{ inputs.semgrep-config }}
+      extra-args: ${{ inputs.semgrep-extra-args }}
+      fail-on-findings: ${{ inputs.semgrep-fail-on-findings }}
+      upload: ${{ inputs.upload-sarif }}
+
+  snyk:
+    if: >-
+      inputs.snyk
+      && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    uses: $/.github/workflows/snyk.yml
+    permissions:
+      security-events: write
+      contents: read
+      actions: write
+    with:
+      cancel-run-on-failure: ${{ inputs.cancel-run-on-failure }}
+      args: ${{ inputs.snyk-args }}
+      monitor: ${{ inputs.snyk-monitor }}
+      upload: ${{ inputs.upload-sarif }}
+    secrets:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+  gate:
+    needs: [rust, codeql, semgrep, snyk]
+    # always(): also runs (and fails) when the run was cancelled, e.g. by cancel-run after a
+    # failed job, so a required `gate` check is never left `skipped` (which counts as passed).
+    # Skipped on draft PRs like every other job, so a draft never leaves a green `gate` behind.
+    if: >-
+      always()
+      && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    runs-on: ubuntu-latest
+    outputs:
+      result: ${{ steps.done.outputs.result }}
+    steps:
+      # A job turned off by its input is `skipped` on purpose; any other non-success fails.
+      - name: Jobs turned off by input
+        id: off
+        env:
+          RUST: ${{ inputs.rust }}
+          CODEQL: ${{ inputs.codeql }}
+          SEMGREP: ${{ inputs.semgrep }}
+          SNYK: ${{ inputs.snyk }}
+        run: |
+          off=""
+          [ "$RUST" = "true" ] || off="$off rust"
+          [ "$CODEQL" = "true" ] || off="$off codeql"
+          [ "$SEMGREP" = "true" ] || off="$off semgrep"
+          [ "$SNYK" = "true" ] || off="$off snyk"
+          if [ "$off" = " rust codeql semgrep snyk" ]; then
+            echo "::error title=gate::every job is turned off; nothing to gate on"
+            exit 1
+          fi
+          echo "skip-ok=$off" >> "$GITHUB_OUTPUT"
+      - uses: $/.github/actions/gate # nosemgrep: github-actions-mutable-action-tag
+        with:
+          needs: ${{ toJSON(needs) }}
+          skip-ok: ${{ steps.off.outputs.skip-ok }}
+      - id: done
+        run: echo "result=success" >> "$GITHUB_OUTPUT"
+      - name: Cancel the run on failure
+        if: failure() && !cancelled() && inputs.cancel-run-on-failure
+        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag
