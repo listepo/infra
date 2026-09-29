@@ -161,6 +161,7 @@ jobs:
   # The matrix input, or the shared matrix when it is empty (strategy cannot read `env`).
   plan:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       matrix: ${{ steps.m.outputs.matrix }}
     steps:

@@ -162,24 +162,34 @@ on:
         default: ""
     secrets:
       MACOS_CERTIFICATE:
+        description: "Base64 Developer ID Application .p12 for codesign (macos-sign)."
         required: false
       MACOS_CERTIFICATE_PWD:
+        description: "Password of MACOS_CERTIFICATE."
         required: false
       APPLE_ID:
+        description: "Apple ID for notarization (alternative to the App Store Connect API key)."
         required: false
       APPLE_TEAM_ID:
+        description: "Apple Developer team ID for notarization with APPLE_ID."
         required: false
       APPLE_APP_PASSWORD:
+        description: "App-specific password of APPLE_ID for notarization."
         required: false
       APPSTORE_CONNECT_KEY:
+        description: "Base64 App Store Connect API key (.p8) for notarization."
         required: false
       APPSTORE_CONNECT_KEY_ID:
+        description: "Key ID of APPSTORE_CONNECT_KEY."
         required: false
       APPSTORE_CONNECT_ISSUER_ID:
+        description: "Issuer ID of APPSTORE_CONNECT_KEY."
         required: false
       CARGO_REGISTRY_TOKEN:
+        description: "crates.io token, needed only with publish-crates."
         required: false
       PUBLISH_TOKEN:
+        description: "Token exposed to publish-command as PUBLISH_TOKEN."
         required: false
     outputs:
       tag:
@@ -196,6 +206,7 @@ env:
 jobs:
   checks:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       checks: read

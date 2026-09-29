@@ -59,6 +59,7 @@ on:
         default: true
     secrets:
       RELEASE_PLZ_TOKEN:
+        description: "Fine-grained PAT (contents + pull requests: write). Not GITHUB_TOKEN: a PR opened with it runs no CI."
         required: true
 
 permissions:
@@ -72,6 +73,7 @@ concurrency:
 jobs:
   detect:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       merged: ${{ steps.check.outputs.merged }}
       version: ${{ steps.check.outputs.version }}
@@ -179,6 +181,7 @@ jobs:
       !cancelled() && needs.detect.outputs.merged == 'true' && inputs.release-workflow != ''
       && (needs.verify.result == 'success' || needs.verify.result == 'skipped')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       actions: write
     steps:

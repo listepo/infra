@@ -36,6 +36,7 @@ on:
         default: true
     secrets:
       SNYK_TOKEN:
+        description: "Snyk API token. Empty (unset, fork PRs, Dependabot runs) skips the Snyk job with a notice."
         required: false
 
 permissions:
