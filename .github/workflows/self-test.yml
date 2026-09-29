@@ -76,6 +76,18 @@ jobs:
     secrets:
       SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
 
+  # The config-driven entrypoint with tests/fixtures/infra.yml.
+  ci:
+    name: ci
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: read
+      actions: write
+    with:
+      config-file: tests/fixtures/infra.yml
+
   sonarcloud:
     name: sonarcloud
     uses: ./.github/workflows/sonarcloud.yml

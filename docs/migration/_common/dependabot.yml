@@ -1,0 +1,30 @@
+# .github/workflows/dependabot.yml — identical in every consumer (only `wait-workflow` differs if
+# the CI caller is not named ci.yml). The CI itself is NOT re-run here: ci.yml already runs on
+# the Dependabot PR (pull_request trigger); automerge waits for that run and requires it green.
+name: Dependabot
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+concurrency:
+  group: dependabot-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  automerge:
+    if: >-
+      github.actor == 'dependabot[bot]'
+      && github.event.pull_request.user.login == 'dependabot[bot]'
+      && github.event.pull_request.head.repo.full_name == github.repository
+    uses: listepo/infra/.github/workflows/dependabot-automerge.yml@<SHA> # main
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
+    with:
+      ci-result: success # the real gate is wait-workflow below
+      wait-workflow: ci.yml

@@ -1,0 +1,84 @@
+# .github/infra.yml — cox (main). Everything ci.yml, pipeline.yml and sonarcloud.yml did.
+version: 1
+
+rust:
+  enabled: true
+  # The shared matrix minus Windows: cox is Unix-only.
+  matrix:
+    - {os: ubuntu-latest, target: x86_64-unknown-linux-gnu}
+    - {os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu}
+    - {os: macos-latest, target: aarch64-apple-darwin}
+    - {os: macos-latest, target: x86_64-apple-darwin}
+  clippy-args: --workspace
+  tools: nextest
+  setup-command: |
+    if [ "$RUNNER_OS" = Linux ]; then bash .github/actions/bwrap/install.sh; fi
+  test-command: cargo nextest run --workspace
+  build-command: cargo build --workspace --all-targets --all-features --target "$TARGET"
+  cache-all-refs: true
+
+codeql:
+  languages: [actions, javascript-typescript, python, rust]
+
+sonarcloud:
+  enabled: true
+  events: [push, pull_request, workflow_dispatch]
+  rust: true
+  mise-install-args: rust
+  coverage-command: cargo llvm-cov --workspace --locked --lcov --output-path coverage/lcov.info
+
+jobs:
+  - name: sandbox-landlock
+    runs-on: ubuntu-24.04
+    mise: rust
+    rust-pin: true
+    rust-cache: true
+    tools: nextest
+    env: {COX_EXPECT_SANDBOX: landlock}
+    setup: |
+      sudo apt-get remove -y bubblewrap || true
+      if command -v bwrap; then echo "bwrap still on PATH"; exit 1; fi
+    run: cargo nextest run -p cox-tools sandbox_ bash_
+
+  - name: plugins
+    runs-on: ubuntu-24.04
+    mise: rust
+    rust-pin: true
+    rust-cache: true
+    run: |
+      cargo test --manifest-path plugins/Cargo.toml --workspace
+      cargo build --manifest-path plugins/Cargo.toml --workspace --target wasm32-unknown-unknown
+
+  - name: plugin-examples
+    runs-on: ubuntu-24.04
+    mise: rust dart@3.13.4 # was dart-lang/setup-dart; or pin dart in mise.toml
+    rust-pin: true
+    rust-cache: true
+    tools: nextest
+    setup: bash .github/actions/bwrap/install.sh
+    run: |
+      (cd plugins/examples/dart && dart pub get && mkdir -p build \
+        && dart compile exe bin/server.dart -o build/example_dart)
+      cargo nextest run -p cox --run-ignored only -E 'test(plugin_example_dart)'
+
+  - name: deny
+    runs-on: ubuntu-24.04
+    mise: false
+    tools: cargo-deny # was EmbarkStudios/cargo-deny-action@v2
+    run: cargo deny check
+
+  - name: audit
+    runs-on: ubuntu-24.04
+    mise: rust
+    rust-pin: true
+    tools: cargo-audit
+    run: |
+      ignores=$(python3 -c 'import tomllib; print(" ".join("--ignore " + (i if isinstance(i, str) else i["id"]) for i in tomllib.load(open("deny.toml", "rb"))["advisories"]["ignore"]))')
+      cargo audit $ignores
+
+  - name: footprint
+    runs-on: [macos-15, ubuntu-24.04]
+    mise: rust
+    rust-pin: true
+    rust-cache: true
+    run: bash scripts/footprint.sh --check

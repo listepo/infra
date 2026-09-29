@@ -1,0 +1,32 @@
+# self-test config for ci.yml: Rust CI on the fixture crate, CodeQL on workflows only,
+# Semgrep/Snyk/SonarCloud/lint off (covered by other self-test jobs), two custom jobs.
+version: 1
+rust:
+  enabled: true
+  working-directory: tests/fixtures/rust-crate
+  matrix:
+    - {os: ubuntu-latest, target: x86_64-unknown-linux-gnu}
+  rust-version: "1.98.1"
+  mise-install-args: ""
+  timeout-minutes: 30
+  cache-all-refs: true
+codeql:
+  languages: [actions]
+semgrep:
+  enabled: false
+snyk:
+  enabled: false
+lint:
+  enabled: false
+jobs:
+  - name: echo
+    mise: false
+    runs-on: [ubuntu-latest, macos-latest]
+    matrix:
+      - {greeting: hello}
+    run: test "$GREETING" = hello
+  - name: fixture tree
+    mise: false
+    working-directory: tests/fixtures/rust-crate
+    env: {EXPECT: Cargo.toml}
+    run: test -f "$EXPECT"

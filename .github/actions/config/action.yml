@@ -1,0 +1,62 @@
+name: config
+description: >-
+  Read ci.yml's configuration: infra defaults (defaults.yml next to this file), then
+  config/repos/<repository name>.yml in listepo/infra at the pinned commit, then the caller's
+  own config file (default .github/infra.yml). Later files win key by key; lists are replaced.
+  Emits `json` (normalized config: `<check>.run` booleans, input values), `jobs` (custom job
+  matrix) and `skip-ok` (checks the gate may see as skipped).
+inputs:
+  config-file:
+    description: Path of the caller's config file. A missing file means infra defaults.
+    required: false
+    default: .github/infra.yml
+  cancel-run-on-failure:
+    description: '"true"/"false" overrides the config; empty keeps it.'
+    required: false
+    default: ""
+outputs:
+  json:
+    description: Normalized configuration (JSON).
+    value: ${{ steps.config.outputs.json }}
+  jobs:
+    description: Custom jobs (JSON list for a matrix `include`).
+    value: ${{ steps.config.outputs.jobs }}
+  skip-ok:
+    description: Space-separated job names that are skipped on purpose.
+    value: ${{ steps.config.outputs.skip-ok }}
+  draft-skip:
+    description: '"true" when this is a draft PR and skip-drafts is on.'
+    value: ${{ steps.config.outputs.draft-skip }}
+runs:
+  using: composite
+  steps:
+    # Only the config file; no credentials left behind.
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        path: .infra-config
+        persist-credentials: false
+        sparse-checkout: ${{ inputs.config-file }}
+        sparse-checkout-cone-mode: false
+    - id: config
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        CONFIG_FILE: ${{ inputs.config-file }}
+        REPO_NAME: ${{ github.event.repository.name }}
+        PRIVATE: ${{ github.event.repository.private }}
+        EVENT: ${{ github.event_name }}
+        DRAFT: ${{ github.event.pull_request.draft }}
+        CANCEL_OVERRIDE: ${{ inputs.cancel-run-on-failure }}
+      run: |
+        set -euo pipefail
+        files=("$ACTION_PATH/defaults.yml")
+        central="$ACTION_PATH/../../../config/repos/$REPO_NAME.yml"
+        if [ -f "$central" ]; then files+=("$central"); echo "central: config/repos/$REPO_NAME.yml"; fi
+        if [ -f ".infra-config/$CONFIG_FILE" ]; then
+          files+=(".infra-config/$CONFIG_FILE"); echo "local: $CONFIG_FILE"
+        else
+          echo "::notice title=infra config::no $CONFIG_FILE; using infra defaults"
+        fi
+        # yq (mikefarah) ships on GitHub-hosted runners: deep-merge maps, replace lists.
+        yq eval-all -o=json '. as $f ireduce ({}; . * $f)' "${files[@]}" \
+          | python3 "$ACTION_PATH/normalize.py"

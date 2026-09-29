@@ -1,0 +1,33 @@
+# .github/workflows/ci.yml — replaces ci.yml (minus /review), pipeline.yml, sonarcloud.yml, verify.yml.
+# What runs is configured in .github/infra.yml.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: listepo/infra/.github/workflows/ci.yml@<SHA> # main
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: read
+      actions: write
+    secrets:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+

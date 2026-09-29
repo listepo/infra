@@ -1,0 +1,82 @@
+# Defaults for ci.yml, merged under config/repos/<repo>.yml (central, in infra) and the
+# consumer's .github/infra.yml (local, wins). Maps merge key by key; lists are replaced.
+# Schema and examples: docs/config.md.
+version: 1
+
+# Cancel the whole run when any job fails (cancel-run). Needs `actions: write` on the caller.
+cancel-run-on-failure: true
+# Draft pull requests run nothing (the gate included).
+skip-drafts: true
+# SARIF upload to code scanning: auto = public repositories only (Free plan).
+upload-sarif: auto
+
+# `enabled`: true | false | auto (auto = public repositories only; listepo policy: no scans on
+# private repositories). `events`: run only for these github.event_name values (empty = all).
+rust:
+  enabled: false
+  events: []
+  matrix: []            # [] = ci-rust.yml's shared five-target matrix
+  rust-version: ""
+  fmt-runs-on: ubuntu-latest
+  working-directory: "."
+  mise-install-args: rust
+  clippy-args: ""
+  tools: ""
+  setup-command: ""
+  test-command: cargo test $PACKAGE_ARGS --all-targets $FEATURE_ARGS
+  doc-tests: true
+  build-command: cargo build $PACKAGE_ARGS --all-targets $FEATURE_ARGS --target "$TARGET"
+  package-args: --workspace
+  feature-args: --all-features
+  msrv: ""
+  msrv-command: cargo check $PACKAGE_ARGS --all-targets $FEATURE_ARGS
+  timeout-minutes: 60
+  cache-all-refs: false
+
+codeql:
+  enabled: auto
+  events: []
+  languages: [actions]
+  build-mode: none
+  build-command: ""
+  queries: security-and-quality
+  config-file: ""
+  runs-on: ubuntu-latest
+
+semgrep:
+  enabled: auto
+  events: []
+  config: p/default
+  extra-args: ""
+  fail-on-findings: false
+
+snyk:
+  enabled: auto
+  events: []
+  args: --all-projects
+  monitor: true
+
+sonarcloud:
+  enabled: false
+  events: []
+  organization: ""
+  project-key: ""
+  args: ""
+  project-base-dir: "."
+  mise: true
+  mise-install-args: ""
+  rust: false
+  setup-command: ""
+  coverage-command: ""
+  soft-fail: true
+  timeout-minutes: 60
+
+lint:
+  enabled: true
+  events: []
+  actionlint-version: 1.7.12
+  args: ""
+  extra-command: ""
+
+# Repository-specific jobs, run as one matrix job (`ci / <name>`). See docs/config.md.
+jobs: []

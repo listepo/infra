@@ -1,0 +1,257 @@
+name: ci
+
+# Config-driven single entrypoint. A consumer's only CI file is a thin caller (triggers +
+# `uses:` this file); what runs, and how, comes from YAML: infra defaults
+# (.github/actions/config/defaults.yml) < config/repos/<repo>.yml here < the consumer's
+# .github/infra.yml. See docs/config.md.
+#
+# `config` reads the files; every check job is gated by `if:` on its output (a reusable
+# workflow's `uses:` cannot be dynamic, so every possible job is listed here and switched off
+# by config). Repository-specific jobs (`jobs:` in the config) run as one matrix job. `gate`
+# runs with always() and fails on anything but success, except jobs the config turned off.
+#
+# Caller job permissions: contents: read, security-events: write (SARIF), pull-requests: read
+# (SonarCloud), actions: write (cancel-run). A caller granting less fails at startup even for
+# disabled checks, because GitHub validates every nested job's permissions.
+# Secrets: SNYK_TOKEN, SONAR_TOKEN (optional; the jobs skip without them).
+on:
+  workflow_call:
+    inputs:
+      config-file:
+        description: Consumer config file. Missing = infra defaults (+ config/repos/<repo>.yml).
+        type: string
+        required: false
+        default: .github/infra.yml
+      cancel-run-on-failure:
+        description: >-
+          "true"/"false" overrides the config's cancel-run-on-failure for this call, e.g.
+          "false" in a Dependabot flow whose notify job must run after a failure. Empty keeps it.
+        type: string
+        required: false
+        default: ""
+    secrets:
+      SNYK_TOKEN:
+        description: Snyk API token (optional).
+        required: false
+      SONAR_TOKEN:
+        description: SonarCloud token (optional).
+        required: false
+    outputs:
+      result:
+        description: "`success` when the gate passed."
+        value: ${{ jobs.gate.outputs.result }}
+      config:
+        description: The normalized configuration (JSON).
+        value: ${{ jobs.config.outputs.json }}
+
+permissions:
+  contents: read
+  actions: write # cancel-run on failure
+
+jobs:
+  config:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      json: ${{ steps.config.outputs.json }}
+      jobs: ${{ steps.config.outputs.jobs }}
+      skip-ok: ${{ steps.config.outputs.skip-ok }}
+      draft-skip: ${{ steps.config.outputs.draft-skip }}
+    steps:
+      - id: config
+        uses: $/.github/actions/config # nosemgrep: github-actions-mutable-action-tag
+        with:
+          config-file: ${{ inputs.config-file }}
+          cancel-run-on-failure: ${{ inputs.cancel-run-on-failure }}
+
+  rust:
+    needs: config
+    if: fromJSON(needs.config.outputs.json).rust.run
+    uses: $/.github/workflows/ci-rust.yml
+    with:
+      cancel-run-on-failure: ${{ fromJSON(needs.config.outputs.json).cancel-run-on-failure }}
+      matrix: ${{ fromJSON(needs.config.outputs.json).rust.matrix-json }}
+      rust-version: ${{ fromJSON(needs.config.outputs.json).rust.rust-version }}
+      fmt-runs-on: ${{ fromJSON(needs.config.outputs.json).rust.fmt-runs-on }}
+      working-directory: ${{ fromJSON(needs.config.outputs.json).rust.working-directory }}
+      mise-install-args: ${{ fromJSON(needs.config.outputs.json).rust.mise-install-args }}
+      clippy-args: ${{ fromJSON(needs.config.outputs.json).rust.clippy-args }}
+      tools: ${{ fromJSON(needs.config.outputs.json).rust.tools }}
+      setup-command: ${{ fromJSON(needs.config.outputs.json).rust.setup-command }}
+      test-command: ${{ fromJSON(needs.config.outputs.json).rust.test-command }}
+      doc-tests: ${{ fromJSON(needs.config.outputs.json).rust.doc-tests }}
+      build-command: ${{ fromJSON(needs.config.outputs.json).rust.build-command }}
+      package-args: ${{ fromJSON(needs.config.outputs.json).rust.package-args }}
+      feature-args: ${{ fromJSON(needs.config.outputs.json).rust.feature-args }}
+      msrv: ${{ fromJSON(needs.config.outputs.json).rust.msrv }}
+      msrv-command: ${{ fromJSON(needs.config.outputs.json).rust.msrv-command }}
+      timeout-minutes: ${{ fromJSON(needs.config.outputs.json).rust.timeout-minutes }}
+      cache-all-refs: ${{ fromJSON(needs.config.outputs.json).rust.cache-all-refs }}
+
+  codeql:
+    needs: config
+    if: fromJSON(needs.config.outputs.json).codeql.run
+    uses: $/.github/workflows/codeql.yml
+    permissions:
+      security-events: write
+      contents: read
+      actions: write
+    with:
+      cancel-run-on-failure: ${{ fromJSON(needs.config.outputs.json).cancel-run-on-failure }}
+      languages: ${{ fromJSON(needs.config.outputs.json).codeql.languages-json }}
+      build-mode: ${{ fromJSON(needs.config.outputs.json).codeql.build-mode }}
+      queries: ${{ fromJSON(needs.config.outputs.json).codeql.queries }}
+      build-command: ${{ fromJSON(needs.config.outputs.json).codeql.build-command }}
+      config-file: ${{ fromJSON(needs.config.outputs.json).codeql.config-file }}
+      runs-on: ${{ fromJSON(needs.config.outputs.json).codeql.runs-on }}
+      upload: ${{ fromJSON(needs.config.outputs.json).upload-sarif }}
+
+  semgrep:
+    needs: config
+    if: fromJSON(needs.config.outputs.json).semgrep.run
+    uses: $/.github/workflows/semgrep.yml
+    permissions:
+      security-events: write
+      contents: read
+      actions: write
+    with:
+      cancel-run-on-failure: ${{ fromJSON(needs.config.outputs.json).cancel-run-on-failure }}
+      config: ${{ fromJSON(needs.config.outputs.json).semgrep.config }}
+      extra-args: ${{ fromJSON(needs.config.outputs.json).semgrep.extra-args }}
+      fail-on-findings: ${{ fromJSON(needs.config.outputs.json).semgrep.fail-on-findings }}
+      upload: ${{ fromJSON(needs.config.outputs.json).upload-sarif }}
+
+  snyk:
+    needs: config
+    if: fromJSON(needs.config.outputs.json).snyk.run
+    uses: $/.github/workflows/snyk.yml
+    permissions:
+      security-events: write
+      contents: read
+      actions: write
+    with:
+      cancel-run-on-failure: ${{ fromJSON(needs.config.outputs.json).cancel-run-on-failure }}
+      args: ${{ fromJSON(needs.config.outputs.json).snyk.args }}
+      monitor: ${{ fromJSON(needs.config.outputs.json).snyk.monitor }}
+      upload: ${{ fromJSON(needs.config.outputs.json).upload-sarif }}
+    secrets:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+  sonarcloud:
+    needs: config
+    if: fromJSON(needs.config.outputs.json).sonarcloud.run
+    uses: $/.github/workflows/sonarcloud.yml
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: write
+    with:
+      cancel-run-on-failure: ${{ fromJSON(needs.config.outputs.json).cancel-run-on-failure }}
+      organization: ${{ fromJSON(needs.config.outputs.json).sonarcloud.organization }}
+      project-key: ${{ fromJSON(needs.config.outputs.json).sonarcloud.project-key }}
+      args: ${{ fromJSON(needs.config.outputs.json).sonarcloud.args }}
+      project-base-dir: ${{ fromJSON(needs.config.outputs.json).sonarcloud.project-base-dir }}
+      mise: ${{ fromJSON(needs.config.outputs.json).sonarcloud.mise }}
+      mise-install-args: ${{ fromJSON(needs.config.outputs.json).sonarcloud.mise-install-args }}
+      rust: ${{ fromJSON(needs.config.outputs.json).sonarcloud.rust }}
+      setup-command: ${{ fromJSON(needs.config.outputs.json).sonarcloud.setup-command }}
+      coverage-command: ${{ fromJSON(needs.config.outputs.json).sonarcloud.coverage-command }}
+      soft-fail: ${{ fromJSON(needs.config.outputs.json).sonarcloud.soft-fail }}
+      timeout-minutes: ${{ fromJSON(needs.config.outputs.json).sonarcloud.timeout-minutes }}
+    secrets:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  lint:
+    needs: config
+    if: fromJSON(needs.config.outputs.json).lint.run
+    uses: $/.github/workflows/lint.yml
+    with:
+      cancel-run-on-failure: ${{ fromJSON(needs.config.outputs.json).cancel-run-on-failure }}
+      actionlint-version: ${{ fromJSON(needs.config.outputs.json).lint.actionlint-version }}
+      args: ${{ fromJSON(needs.config.outputs.json).lint.args }}
+      extra-command: ${{ fromJSON(needs.config.outputs.json).lint.extra-command }}
+
+  # Repository-specific jobs from the config's `jobs:` list, one matrix entry each.
+  custom:
+    needs: config
+    if: needs.config.outputs.jobs != '[]'
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.config.outputs.jobs) }}
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: ${{ matrix.timeout-minutes }}
+    continue-on-error: ${{ matrix.allow-failure }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ matrix.working-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: ${{ matrix.fetch-depth }}
+          persist-credentials: false
+      - name: Job environment
+        env:
+          JOB_ENV: ${{ matrix.env }}
+        run: jq -r 'to_entries[] | "\(.key)=\(.value)"' <<<"$JOB_ENV" >> "$GITHUB_ENV"
+      - if: matrix.mise == 'true'
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          install_args: ${{ matrix.mise-install-args }}
+      - name: rustc is the mise.toml pin
+        if: matrix.rust-pin
+        run: |
+          set -euo pipefail
+          version="$(mise current rust)"
+          echo "RUSTUP_TOOLCHAIN=$version" >> "$GITHUB_ENV"
+          rustc --version | grep -q "^rustc $version " \
+            || { echo "::error::rustc is not the mise.toml pin $version"; exit 1; }
+      - if: matrix.rust-cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ matrix.name }}
+      - if: matrix.tools != ''
+        uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
+        with:
+          tool: ${{ matrix.tools }}
+      - name: Setup
+        if: matrix.setup != ''
+        env:
+          SETUP: ${{ matrix.setup }}
+        run: bash -euo pipefail -c "$SETUP"
+      - name: Run
+        if: matrix.shell == 'bash'
+        env:
+          RUN: ${{ matrix.run }}
+        run: bash -euo pipefail -c "$RUN"
+      - name: Run (pwsh)
+        if: matrix.shell == 'pwsh'
+        shell: pwsh
+        env:
+          RUN: ${{ matrix.run }}
+        run: Invoke-Expression $env:RUN
+      - name: Cancel the run on failure
+        if: >-
+          failure() && !cancelled() && !matrix.allow-failure
+          && fromJSON(needs.config.outputs.json).cancel-run-on-failure
+        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag
+
+  gate:
+    needs: [config, rust, codeql, semgrep, snyk, sonarcloud, lint, custom]
+    # always(): also runs (and fails) after a cancel-run, so a required `ci / gate` is never
+    # `skipped` (which counts as passed). Skipped on a draft PR when skip-drafts is on, like
+    # pipeline.yml, so a draft never shows a green gate. A failed `config` fails the gate.
+    if: always() && needs.config.outputs.draft-skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      result: ${{ steps.done.outputs.result }}
+    steps:
+      - uses: $/.github/actions/gate # nosemgrep: github-actions-mutable-action-tag
+        with:
+          needs: ${{ toJSON(needs) }}
+          skip-ok: ${{ needs.config.outputs.skip-ok }}
+      - id: done
+        run: echo "result=success" >> "$GITHUB_OUTPUT"

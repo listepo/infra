@@ -1,0 +1,31 @@
+# .github/workflows/bump.yml — replaces bump.yml + verify.yml.
+name: Bump and release
+
+on:
+  workflow_dispatch:
+    inputs:
+      level:
+        description: which part of the version to raise, if the current one is already released
+        default: patch
+        type: choice
+        options: [patch, minor, major]
+
+permissions:
+  contents: read
+
+jobs:
+  bump:
+    uses: listepo/infra/.github/workflows/bump.yml@<SHA> # main
+    permissions:
+      contents: write
+      actions: write
+    with:
+      level: ${{ inputs.level }}
+      release-script: scripts/release.sh
+      mise-install-args: rust git-cliff
+      verify-os: '["macos-latest", "ubuntu-latest", "windows-latest"]'
+      verify-command: |
+        if [ "$RUNNER_OS" = macOS ]; then cargo fmt --all -- --check; fi
+        cargo clippy --all-targets --all-features --locked -- -D warnings
+        cargo nextest run --all-targets --locked
+        cargo nextest run --all-targets --locked --features tui

@@ -1,0 +1,38 @@
+# .github/infra.yml — rtok. CI is `just` recipes, so ci-rust.yml stays off and the recipes run
+# as custom jobs (same commands as today's ci.yml).
+version: 1
+
+codeql:
+  languages: [actions, javascript-typescript, python, rust]
+
+sonarcloud:
+  enabled: true
+  events: [push, workflow_dispatch] # main-branch analysis only, as today
+  mise-install-args: ""             # everything in mise.toml (just, cargo-llvm-cov, ...)
+  coverage-command: just test-cov
+  soft-fail: false
+
+jobs:
+  - name: lint
+    rust-cache: true
+    run: |
+      just fmt-check lint build-min dup js python
+      just webui-check
+      just publish-dry
+      tools/plugin-versions.sh --check "$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
+
+  - name: check
+    runs-on: [ubuntu-latest, macos-latest]
+    rust-cache: true
+    run: |
+      just test
+      just example
+
+  - name: windows
+    runs-on: windows-latest
+    rust-cache: true
+    timeout-minutes: 30
+    matrix:
+      - {partition: "1/2"}
+      - {partition: "2/2"}
+    run: mise exec -- cargo nextest run --workspace --partition "count:$PARTITION"

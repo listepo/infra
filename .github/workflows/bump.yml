@@ -1,0 +1,103 @@
+name: bump
+
+# "Bump and release" for cargo-dist repositories (rtok, ketch; dunnage when re-enabled):
+# verify the commit, then run the repository's release script, which raises the version,
+# pushes one commit and dispatches the dist release workflow. Replaces bump.yml + verify.yml
+# in each repository; the version logic stays in the repository's script.
+# A workflow_dispatch sent with GITHUB_TOKEN starts the release workflow (the documented
+# exception), so no PAT is needed.
+#
+# Caller job permissions: contents: write (version commit), actions: write (dispatch +
+# cancel-run). The caller owns `workflow_dispatch` with the `level` choice.
+on:
+  workflow_call:
+    inputs:
+      level:
+        description: patch | minor | major, passed to the release script.
+        type: string
+        required: true
+      release-script:
+        description: Script run as `<script> <level>` (e.g. tools/release.sh, scripts/release.sh).
+        type: string
+        required: true
+      verify-command:
+        description: Bash run on every verify-os before releasing (e.g. `just check && just example`).
+        type: string
+        required: true
+      verify-os:
+        description: JSON list of runners for verify.
+        type: string
+        required: false
+        default: '["ubuntu-latest", "macos-latest"]'
+      mise-install-args:
+        description: mise install arguments for the bump job (empty = everything in mise.toml).
+        type: string
+        required: false
+        default: ""
+      cancel-run-on-failure:
+        description: "Cancel the whole run when a job fails (needs `actions: write`)."
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+  actions: write # cancel-run on failure
+
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: true
+      matrix:
+        os: ${{ fromJSON(inputs.verify-os) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Verify
+        shell: bash
+        env:
+          VERIFY: ${{ inputs.verify-command }}
+        run: bash -euo pipefail -c "$VERIFY"
+      - name: Cancel the run on failure
+        if: failure() && !cancelled() && inputs.cancel-run-on-failure
+        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag
+
+  bump:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # tags decide whether the current version was released
+          persist-credentials: true # the script pushes the version commit
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          install_args: ${{ inputs.mise-install-args }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LEVEL: ${{ inputs.level }}
+          SCRIPT: ${{ inputs.release-script }}
+        run: |
+          set -euo pipefail
+          case "$LEVEL" in patch|minor|major) ;; *) echo "::error::bad level $LEVEL"; exit 1 ;; esac
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          "./$SCRIPT" "$LEVEL"
+      - name: Cancel the run on failure
+        if: failure() && !cancelled() && inputs.cancel-run-on-failure
+        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag

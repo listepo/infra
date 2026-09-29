@@ -1,0 +1,62 @@
+name: revert-on-failure
+
+# Revert a push to the default branch whose CI failed, as a job the caller adds after its CI
+# call (`needs: [ci]`, `if: always() && needs.ci.result == 'failure'`). Wraps the
+# revert-on-failure composite action so a consumer carries no revert logic. Kept out of ci.yml
+# so pull-request runs never need `contents: write`.
+#
+# Caller job permissions: contents: write, pull-requests: write (re-apply PR; also enable
+# "Allow GitHub Actions to create and approve pull requests"). With reapply-pr: false,
+# contents: write is enough.
+on:
+  workflow_call:
+    inputs:
+      reapply-pr:
+        description: Open a draft PR that re-applies the reverted work.
+        type: boolean
+        required: false
+        default: true
+      skip-workflow-changes:
+        description: Skip pushes that touch .github/ (GITHUB_TOKEN cannot push workflow files).
+        type: boolean
+        required: false
+        default: true
+      dry-run:
+        description: Log what would be reverted without pushing.
+        type: boolean
+        required: false
+        default: false
+    outputs:
+      reverted:
+        description: '"true" when a revert was pushed.'
+        value: ${{ jobs.revert.outputs.reverted }}
+      pr-url:
+        description: URL of the re-apply PR.
+        value: ${{ jobs.revert.outputs.pr-url }}
+
+permissions:
+  contents: read
+
+jobs:
+  revert:
+    if: >-
+      github.event_name == 'push'
+      && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      reverted: ${{ steps.revert.outputs.reverted }}
+      pr-url: ${{ steps.revert.outputs.pr-url }}
+    steps:
+      - id: revert
+        uses: $/.github/actions/revert-on-failure # nosemgrep: github-actions-mutable-action-tag
+        with:
+          before: ${{ github.event.before }}
+          after: ${{ github.sha }}
+          branch: ${{ github.ref_name }}
+          reapply-pr: ${{ inputs.reapply-pr }}
+          skip-workflow-changes: ${{ inputs.skip-workflow-changes }}
+          dry-run: ${{ inputs.dry-run }}
