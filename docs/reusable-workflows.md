@@ -203,6 +203,11 @@ recipes) sets `rust: false`, keeps its local `ci.yml`, and adds a local gate:
 On push to the default branch. Inputs: `tag-prefix` (`v`), `package` (`""` = first workspace
 package), `release-workflow` (`release.yml`, dispatched with `-f tag=<prefix><version>`),
 `verify-command`, `verify-os` (`["ubuntu-latest", "macos-latest"]`), `mise` (true).
+`release-commit-pattern` (ERE, group 1 = version; default matches `release: vX.Y.Z` with an
+optional ` (#123)`) must match release-plz.toml's `pr_name`, e.g.
+`'^chore: release v([0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.+-]*)( \(#[0-9]+\))?$'`.
+`release-branch-prefix` (`""`; e.g. `release-plz-`) also requires the commit to come from a PR
+on such a branch, so a bump script's direct push with the same subject is not a merge.
 Secret `RELEASE_PLZ_TOKEN` is required (fine-grained PAT, contents + pull requests write): a
 PR opened with `GITHUB_TOKEN` would run no CI. The merge is recognised by a commit line equal
 to `release: vX.Y.Z` (optionally ` (#123)`).
