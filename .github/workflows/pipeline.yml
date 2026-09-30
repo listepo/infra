@@ -111,6 +111,16 @@ on:
         type: boolean
         required: false
         default: false
+      rust-changed-only:
+        description: ci-rust.yml `changed-only`.
+        type: boolean
+        required: false
+        default: false
+      rust-full-package-args:
+        description: ci-rust.yml `full-package-args`.
+        type: string
+        required: false
+        default: --workspace
       codeql:
         description: Run codeql.yml.
         type: boolean
@@ -226,6 +236,8 @@ jobs:
       msrv-command: ${{ inputs.rust-msrv-command }}
       timeout-minutes: ${{ inputs.rust-timeout-minutes }}
       cache-all-refs: ${{ inputs.rust-cache-all-refs }}
+      changed-only: ${{ inputs.rust-changed-only }}
+      full-package-args: ${{ inputs.rust-full-package-args }}
 
   codeql:
     if: >-

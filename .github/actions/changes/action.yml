@@ -1,0 +1,92 @@
+name: changes
+description: >-
+  Classify the files a pull request or push changed by ecosystem (Rust, Swift, .NET), so
+  callers pick which test suites run. `<eco>_deps` is true when a dependency manifest or lock
+  file of that ecosystem changed, and then `<eco>_full` is true: the caller must run that
+  ecosystem's full suite, whatever narrower selection it would make otherwise. Events without
+  a diff (schedule, workflow_dispatch, ...), a CI or toolchain change (.github/, mise.toml)
+  and any error force every output to true: the action fails open, never towards fewer tests.
+  Needs only `contents: read` (GitHub REST API; no checkout).
+inputs:
+  rust-paths:
+    description: Extra extended regexes (one per line) whose changes count as Rust changes.
+    required: false
+    default: ""
+  swift-paths:
+    description: Extra extended regexes (one per line) whose changes count as Swift changes.
+    required: false
+    default: ""
+  dotnet-paths:
+    description: Extra extended regexes (one per line) whose changes count as .NET changes.
+    required: false
+    default: ""
+  token:
+    description: Token for the compare and tree API calls (contents read).
+    required: false
+    default: ${{ github.token }}
+outputs:
+  forced:
+    description: '"true" when no reliable diff exists or CI/toolchain files changed: every ecosystem runs in full.'
+    value: ${{ steps.changes.outputs.forced }}
+  reason:
+    description: Why `forced` is true (empty otherwise).
+    value: ${{ steps.changes.outputs.reason }}
+  files:
+    description: Number of changed files (empty when forced without a diff).
+    value: ${{ steps.changes.outputs.files }}
+  rust:
+    description: '"true" when a Rust source, manifest or lock file (or a `rust-paths` match) changed, or forced.'
+    value: ${{ steps.changes.outputs.rust }}
+  rust_deps:
+    description: '"true" when any Cargo.toml or Cargo.lock changed.'
+    value: ${{ steps.changes.outputs.rust_deps }}
+  rust_full:
+    description: '"true" when the full Rust suite must run: `rust_deps` or `forced`.'
+    value: ${{ steps.changes.outputs.rust_full }}
+  rust_present:
+    description: '"true" when the tree has a Cargo.toml.'
+    value: ${{ steps.changes.outputs.rust_present }}
+  swift:
+    description: '"true" when a Swift/Xcode source or manifest (or a `swift-paths` match) changed, or forced.'
+    value: ${{ steps.changes.outputs.swift }}
+  swift_deps:
+    description: '"true" when Package.swift, Package.resolved, an XcodeGen project.yml or an .xcodeproj project.pbxproj changed.'
+    value: ${{ steps.changes.outputs.swift_deps }}
+  swift_full:
+    description: '"true" when the full Swift build and tests must run: `swift_deps` or `forced`.'
+    value: ${{ steps.changes.outputs.swift_full }}
+  swift_present:
+    description: '"true" when the tree has a Package.swift or an .xcodeproj.'
+    value: ${{ steps.changes.outputs.swift_present }}
+  dotnet:
+    description: '"true" when a .NET source or manifest (or a `dotnet-paths` match) changed, or forced.'
+    value: ${{ steps.changes.outputs.dotnet }}
+  dotnet_deps:
+    description: '"true" when a *.csproj/*.fsproj/*.vbproj, Directory.Packages.props, packages.lock.json, global.json or NuGet.config changed.'
+    value: ${{ steps.changes.outputs.dotnet_deps }}
+  dotnet_full:
+    description: '"true" when the full .NET suite must run: `dotnet_deps` or `forced`.'
+    value: ${{ steps.changes.outputs.dotnet_full }}
+  dotnet_present:
+    description: '"true" when the tree has a .NET project or solution file.'
+    value: ${{ steps.changes.outputs.dotnet_present }}
+runs:
+  using: composite
+  steps:
+    - id: changes
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: ${{ github.repository }}
+        EVENT: ${{ github.event_name }}
+        # Pull request (also pull_request_target), merge queue, then push.
+        BASE: >-
+          ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha
+          || github.event.before }}
+        HEAD: >-
+          ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha
+          || github.sha }}
+        RUST_PATHS: ${{ inputs.rust-paths }}
+        SWIFT_PATHS: ${{ inputs.swift-paths }}
+        DOTNET_PATHS: ${{ inputs.dotnet-paths }}
+      run: bash "$GITHUB_ACTION_PATH/changes.sh"

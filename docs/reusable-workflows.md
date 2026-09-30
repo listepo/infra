@@ -7,6 +7,8 @@ repository. All third-party actions are pinned to full commit SHAs.
 | Workflow | Purpose |
 | --- | --- |
 | `ci-rust.yml` | fmt, clippy, check, tests on a shared OS/target matrix, optional MSRV |
+| `ci-dotnet.yml` | `dotnet test` for every solution; a passing no-op until a .NET project exists |
+| `changes.yml` | classify changed files by ecosystem (Rust, Swift, .NET) for suite selection |
 | `lint.yml` | actionlint (+ shellcheck) on the caller's workflows |
 | `codeql.yml` | CodeQL per language, SARIF to code scanning |
 | `semgrep.yml` | Semgrep OSS (`p/default`), SARIF to code scanning |
@@ -29,7 +31,8 @@ Secrets (declared in each workflow's `on.workflow_call.secrets`):
 
 `permissions:` the calling job must grant:
 
-- `ci-rust.yml`, `lint.yml`: `contents: read`, `actions: write`.
+- `ci-rust.yml`, `ci-dotnet.yml`, `lint.yml`: `contents: read`, `actions: write`.
+- `changes.yml`: `contents: read`.
 - `codeql.yml`, `semgrep.yml`, `snyk.yml`, `pipeline.yml`: `contents: read`,
   `security-events: write` (SARIF upload), `actions: write`.
 - `release-plz.yml`: `contents: write`, `pull-requests: write`, `actions: write`.
@@ -58,6 +61,7 @@ Composite actions (reference them as `pyrlyn/infra/.github/actions/<name>@<sha>`
 | `revert-on-failure` | revert a failed push, push the revert, open a draft re-apply PR |
 | `macos-sign` | Developer ID codesign (or identity discovery for cargo-dist) + notarization |
 | `cancel-run` | cancel the current workflow run (last step, `if: failure()`); `actions: write` |
+| `changes` | changed files by ecosystem: `rust`/`swift`/`dotnet`, `*_deps`, `*_full`, `*_present` |
 
 Private repositories: no scans (CodeQL, Semgrep, Snyk, SonarCloud) by pyrlyn policy.
 
@@ -153,7 +157,87 @@ every job fails if `rustc --version` is not the pinned version.
 | `build-command` | `cargo build $PACKAGE_ARGS --all-targets $FEATURE_ARGS --target "$TARGET"` | |
 | `msrv` | `""` | e.g. `1.85`; adds an `msrv` job |
 | `msrv-command` | `cargo check $PACKAGE_ARGS --all-targets $FEATURE_ARGS` | |
+| `changed-only` | `false` | no work (jobs still pass under their names) when no Rust file changed |
+| `full-package-args` | `--workspace` | replaces `package-args` when a Cargo.toml/Cargo.lock changed |
 | `fmt-runs-on`, `mise-install-args`, `cache-all-refs`, `timeout-minutes` | | |
+
+The `plan` job runs the `changes` action. A Cargo.toml or Cargo.lock change (or a run without
+a diff: schedule, workflow_dispatch, a `.github/` or `mise.toml` change) always runs the full
+suite: `full-package-args` instead of `package-args`, and `changed-only` never skips it.
+`changed-only` is off by default because tests often read non-Rust files (docs, fixtures);
+when on, the matrix still expands and every step is a no-op, so required checks named after
+the targets report success instead of waiting.
+
+## Dependency-driven suite selection (`changes`)
+
+`changes.yml` (reusable, one `changes` job) and the `changes` composite action classify the
+files a pull request, merge-group or push changed (GitHub compare API, three-dot, so exactly
+the pull request's diff; `contents: read`, no checkout):
+
+| Ecosystem | `<eco>_deps` (dependency manifests and locks) | `<eco>` also counts |
+| --- | --- | --- |
+| Rust | `Cargo.toml`, `Cargo.lock` (any directory) | `*.rs`, `.cargo/`, `rust-toolchain*`, `clippy/rustfmt/deny.toml`, `.config/nextest.toml` |
+| Swift | `Package.swift`, `Package@swift-*.swift`, `Package.resolved`, XcodeGen `project.yml`, `*.xcodeproj/project.pbxproj` | `*.swift`, `*.m`, `*.mm`, `*.metal`, `*.xcconfig`, `*.entitlements`, `*.xcstrings`, `*.xcodeproj/`, `*.xcworkspace/`, `*.xcassets/`, `.swiftlint.yml`, `.swift-format` |
+| .NET | `*.csproj`, `*.fsproj`, `*.vbproj`, `Directory.Packages.props`, `packages.lock.json`, `global.json`, `NuGet.config` (any case) | `*.cs`, `*.fs`, `*.vb`, `*.razor`, `*.xaml`, `*.props`, `*.targets`, `*.sln`, `*.slnx`, ... |
+
+Outputs (strings `true`/`false`): `<eco>` (anything of that ecosystem changed),
+`<eco>_deps`, `<eco>_full` (= `<eco>_deps` or `forced`: run the whole suite, never a narrowed
+one), `<eco>_present` (the tree has such a project; `changes.yml` exports it for .NET only),
+`forced` and `reason`. Inputs `rust-paths`, `swift-paths`, `dotnet-paths` add
+repository-specific regexes (one per line) that count as that ecosystem, e.g. a script that
+builds the app.
+
+It fails open: an event without a diff, a `.github/`, `mise.toml` or `.tool-versions` change,
+300 or more changed files, or any API error sets `forced` and every `<eco>`/`<eco>_full` to
+`true`. So a broken classification runs more, never less.
+
+Required checks: gate a job on the outputs with `!cancelled() && (needs.changes.result !=
+'success' || needs.changes.outputs.swift == 'true')` so a failed `changes` job runs the suite
+instead of skipping it. A non-matrix job skipped by its `if:` reports `skipped`, which branch
+protection treats as passed, under its usual name. A matrix job must not be skipped at job
+level (the check would be named after the raw `${{ matrix.* }}` expression and a required
+target check would wait forever): gate its steps, as `ci-rust.yml` does. A local `gate` job
+that `needs:` a job skipped this way passes it in `skip-ok`.
+
+Caller example (the Swift suite of an app that links a Rust library):
+
+```yaml
+jobs:
+  changes:
+    uses: pyrlyn/infra/.github/workflows/changes.yml@<sha> # main
+    permissions:
+      contents: read
+    with:
+      swift-paths: |
+        ^desktop/
+  swift:
+    needs: changes
+    if: >-
+      !cancelled() && (needs.changes.result != 'success'
+      || needs.changes.outputs.swift == 'true' || needs.changes.outputs.rust == 'true')
+    runs-on: macos-26
+    steps:
+      - run: swift test   # always the whole package; swift_full is true on a pin change
+```
+
+## ci-dotnet.yml
+
+One job, `dotnet`, that always runs and reports under that name. Without a `*.csproj`,
+`*.fsproj`, `*.vbproj`, `*.sln` or `*.slnx` in the repository it only classifies and passes
+with a notice (no .NET project exists in any pyrlyn repository yet). Once one exists it
+restores (`--locked-mode` when a `packages.lock.json` is tracked) and runs `dotnet test` for
+every solution, or every project when there is none: the full suite, also for any .NET
+dependency change.
+
+| Input | Default | Notes |
+| --- | --- | --- |
+| `dotnet-version` | `""` | actions/setup-dotnet version; empty = `global.json`, else the runner's SDK |
+| `working-directory` | `.` | |
+| `test-command` | `""` | bash replacing restore + `dotnet test` |
+| `changed-only` | `false` | no-op when no .NET file changed; a dependency change still runs it |
+| `runs-on`, `timeout-minutes`, `cancel-run-on-failure` | | |
+
+`ci.yml` runs it as the `dotnet` check (`enabled: true` by default, see docs/config.md).
 
 ## codeql.yml / semgrep.yml / snyk.yml
 
@@ -173,7 +257,7 @@ Inputs:
   `rust-working-directory`, `rust-mise-install-args`, `rust-clippy-args`, `rust-tools`,
   `rust-setup-command`, `rust-test-command`, `rust-doc-tests`, `rust-build-command`,
   `rust-package-args`, `rust-feature-args`, `rust-msrv`, `rust-msrv-command`,
-  `rust-timeout-minutes`, `rust-cache-all-refs`.
+  `rust-timeout-minutes`, `rust-cache-all-refs`, `rust-changed-only`, `rust-full-package-args`.
 - `codeql` (true), `codeql-languages`, `codeql-build-mode`, `codeql-build-command`,
   `codeql-queries`, `codeql-config-file`, `codeql-runs-on`.
 - `semgrep` (true), `semgrep-config`, `semgrep-extra-args`, `semgrep-fail-on-findings`.

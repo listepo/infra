@@ -87,6 +87,23 @@ jobs:
       msrv-command: ${{ fromJSON(needs.config.outputs.json).rust.msrv-command }}
       timeout-minutes: ${{ fromJSON(needs.config.outputs.json).rust.timeout-minutes }}
       cache-all-refs: ${{ fromJSON(needs.config.outputs.json).rust.cache-all-refs }}
+      changed-only: ${{ fromJSON(needs.config.outputs.json).rust.changed-only }}
+      full-package-args: ${{ fromJSON(needs.config.outputs.json).rust.full-package-args }}
+
+  # .NET tests. On by default: a no-op job (success, notice) until the repository has a .NET
+  # project, then the full `dotnet test`. See ci-dotnet.yml.
+  dotnet:
+    needs: config
+    if: fromJSON(needs.config.outputs.json).dotnet.run
+    uses: $/.github/workflows/ci-dotnet.yml
+    with:
+      cancel-run-on-failure: ${{ fromJSON(needs.config.outputs.json).cancel-run-on-failure }}
+      dotnet-version: ${{ fromJSON(needs.config.outputs.json).dotnet.dotnet-version }}
+      working-directory: ${{ fromJSON(needs.config.outputs.json).dotnet.working-directory }}
+      test-command: ${{ fromJSON(needs.config.outputs.json).dotnet.test-command }}
+      changed-only: ${{ fromJSON(needs.config.outputs.json).dotnet.changed-only }}
+      runs-on: ${{ fromJSON(needs.config.outputs.json).dotnet.runs-on }}
+      timeout-minutes: ${{ fromJSON(needs.config.outputs.json).dotnet.timeout-minutes }}
 
   codeql:
     needs: config
@@ -239,7 +256,7 @@ jobs:
         uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag
 
   gate:
-    needs: [config, rust, codeql, semgrep, snyk, sonarcloud, lint, custom]
+    needs: [config, rust, dotnet, codeql, semgrep, snyk, sonarcloud, lint, custom]
     # always(): also runs (and fails) after a cancel-run, so a required `ci / gate` is never
     # `skipped` (which counts as passed). Skipped on a draft PR when skip-drafts is on, like
     # pipeline.yml, so a draft never shows a green gate. A failed `config` fails the gate.
