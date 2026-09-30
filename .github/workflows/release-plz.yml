@@ -4,7 +4,8 @@ name: release-plz
 # default branch:
 #
 # - `detect`: is this push the merge of a release PR? Only a commit line that *is* the PR title
-#   counts (`release: vX.Y.Z`, optionally with GitHub's squash suffix " (#123)").
+#   counts (`release-commit-pattern`, default `release: vX.Y.Z` with an optional squash suffix
+#   " (#123)"); with `release-branch-prefix`, only from a PR whose branch has that prefix.
 # - `release-pr`: otherwise, open or refresh the release PR with release-plz (next version +
 #   changelog). Held back while the current version has no tag yet (a release in flight).
 # - `verify`: on the merge, run `verify-command` on every OS in `verify-os`.
@@ -47,6 +48,18 @@ on:
         type: string
         required: false
         default: ""
+      verify-mise-install-args:
+        description: mise install arguments for the verify jobs (empty = everything in mise.toml).
+        type: string
+        required: false
+        default: ""
+      verify-tools:
+        description: >-
+          taiki-e/install-action tools installed before verify-command (e.g. `nextest`).
+          Empty skips.
+        type: string
+        required: false
+        default: ""
       verify-os:
         description: JSON array of runner labels for verify.
         type: string
@@ -57,6 +70,21 @@ on:
         type: boolean
         required: false
         default: true
+      release-commit-pattern:
+        description: >-
+          Extended regex a commit message line must match for the push to count as a release PR
+          merge; group 1 is the version. Match release-plz.toml's `pr_name`.
+        type: string
+        required: false
+        default: '^release: v([0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.+-]*)( \(#[0-9]+\))?$'
+      release-branch-prefix:
+        description: >-
+          Also require the commit to belong to a pull request whose head branch starts with
+          this (e.g. `release-plz-`), so a direct push with the same subject (a bump script)
+          is not taken for a merge. Empty skips the check.
+        type: string
+        required: false
+        default: ""
     secrets:
       RELEASE_PLZ_TOKEN:
         description: "Fine-grained PAT (contents + pull requests: write). Not GITHUB_TOKEN: a PR opened with it runs no CI."
@@ -86,12 +114,23 @@ jobs:
         with:
           persist-credentials: false
       - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RE: ${{ inputs.release-commit-pattern }}
+          BRANCH_PREFIX: ${{ inputs.release-branch-prefix }}
         run: |
           set -euo pipefail
-          re='^release: v([0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.+-]*)( \(#[0-9]+\))?$'
-          line="$(git log -1 --format=%B | grep -E "$re" | head -n1 || true)"
+          line="$(git log -1 --format=%B | grep -E "$RE" | head -n1 || true)"
+          if [ -n "$line" ] && [ -n "$BRANCH_PREFIX" ]; then
+            prs="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq \
+              "[.[] | select(.head.ref | startswith(\"$BRANCH_PREFIX\"))] | length")"
+            if [ "$prs" -eq 0 ]; then
+              echo "'$line' is not from a $BRANCH_PREFIX* pull request; not a release PR merge"
+              line=""
+            fi
+          fi
           if [ -n "$line" ]; then
-            version="$(sed -E "s/$re/\1/" <<<"$line")"
+            version="$(sed -E "s/$RE/\1/" <<<"$line")"
             echo "merged=true" >> "$GITHUB_OUTPUT"
             echo "version=$version" >> "$GITHUB_OUTPUT"
             echo "release PR merge for $version"
@@ -166,9 +205,15 @@ jobs:
           persist-credentials: false
       - if: inputs.mise
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          install_args: ${{ inputs.verify-mise-install-args }}
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: false
+      - if: inputs.verify-tools != ''
+        uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
+        with:
+          tool: ${{ inputs.verify-tools }}
       - name: verify
         shell: bash
         env:
