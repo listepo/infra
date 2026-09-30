@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   bump:
-    uses: listepo/infra/.github/workflows/bump.yml@<SHA> # main
+    uses: pyrlyn/infra/.github/workflows/bump.yml@<SHA> # main
     permissions:
       contents: write
       actions: write

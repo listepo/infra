@@ -1,4 +1,4 @@
-# Using listepo/infra
+# Using pyrlyn/infra
 
 ## ci-rust.yml
 
@@ -41,7 +41,7 @@ permissions:
 
 jobs:
   rust:
-    uses: listepo/infra/.github/workflows/ci-rust.yml@<full commit sha>
+    uses: pyrlyn/infra/.github/workflows/ci-rust.yml@<full commit sha>
     with:
       # all optional
       # working-directory: .
@@ -58,7 +58,7 @@ jobs:
 | Input | Default | Description |
 | --- | --- | --- |
 | `matrix` | the shared matrix above | JSON array of `{"os", "target"}` entries, optionally `"test": false`. |
-| `rust-version` | `""` | Exact toolchain via rustup. Empty installs Rust from the caller's `mise.toml` with `jdx/mise-action` (listepo convention: `mise.toml` is the single source of the Rust version). |
+| `rust-version` | `""` | Exact toolchain via rustup. Empty installs Rust from the caller's `mise.toml` with `jdx/mise-action` (pyrlyn convention: `mise.toml` is the single source of the Rust version). |
 | `fmt-runs-on` | `ubuntu-latest` | Runner label of the `fmt` job. |
 | `working-directory` | `.` | Cargo workspace directory. |
 | `mise-install-args` | `rust` | Tools mise installs when `rust-version` is empty. |
@@ -92,7 +92,7 @@ they are passed explicitly or with `secrets: inherit`:
 ```yaml
 jobs:
   rust:
-    uses: listepo/infra/.github/workflows/ci-rust.yml@<full commit sha>
+    uses: pyrlyn/infra/.github/workflows/ci-rust.yml@<full commit sha>
     secrets: inherit
 ```
 
@@ -107,7 +107,7 @@ token permissions; the called workflow cannot raise them.
 
 This repository is public, so any repository can call its workflows. The calling
 repository's Actions policy still applies to every action used inside the called workflow.
-With "only actions owned by listepo", `listepo/infra` itself is allowed but the third-party
+With "only actions owned by listepo", `pyrlyn/infra` itself is allowed but the third-party
 actions it uses (`actions/checkout`, `jdx/mise-action`, `Swatinem/rust-cache`, `taiki-e/install-action`) are blocked.
 Such a repository needs "Allow actions created by GitHub" and these patterns allowed:
 

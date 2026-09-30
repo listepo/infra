@@ -1,6 +1,6 @@
-# listepo/infra
+# pyrlyn/infra
 
-Shared reusable GitHub workflows and build configs for listepo repositories
+Shared reusable GitHub workflows and build configs for pyrlyn repositories
 (rtok, ketch, stator, bindsmith, runa, cox).
 
 ## Reusable workflows
@@ -18,7 +18,7 @@ Shared reusable GitHub workflows and build configs for listepo repositories
 | [`dependabot-automerge.yml`](.github/workflows/dependabot-automerge.yml) | merge allowed Dependabot updates after green CI |
 | [`sonarcloud.yml`](.github/workflows/sonarcloud.yml) | SonarCloud scan, skipped without `SONAR_TOKEN` |
 | [`ci.yml`](.github/workflows/ci.yml) | **single entrypoint**: config-driven (`.github/infra.yml`) Rust CI, scans, SonarCloud, lint and repo-specific jobs behind a `gate` |
-| [`sync-docs.yml`](.github/workflows/sync-docs.yml) | publish docs/ to listepo/landing |
+| [`sync-docs.yml`](.github/workflows/sync-docs.yml) | publish docs/ to pyrlyn/landing |
 | [`pages.yml`](.github/workflows/pages.yml) | build a static site and deploy it to GitHub Pages |
 | [`bump.yml`](.github/workflows/bump.yml) | verify, then run the release script (bump + dispatch dist) |
 | [`revert-on-failure.yml`](.github/workflows/revert-on-failure.yml) | revert a failed push to the default branch |
@@ -37,7 +37,7 @@ for each consumer's thin callers.
 ```yaml
 jobs:
   pipeline:
-    uses: listepo/infra/.github/workflows/pipeline.yml@<full commit sha>
+    uses: pyrlyn/infra/.github/workflows/pipeline.yml@<full commit sha>
     permissions:
       contents: read
       security-events: write

@@ -1,6 +1,6 @@
 # Reusable workflows
 
-Shared GitHub Actions workflows for listepo repositories. Each file under
+Shared GitHub Actions workflows for pyrlyn repositories. Each file under
 `.github/workflows/` with `on: workflow_call` is called from a thin workflow in the consuming
 repository. All third-party actions are pinned to full commit SHAs.
 
@@ -50,7 +50,7 @@ that asks for more than its caller grants), even with the input off. Pass
 e.g. a Dependabot flow whose notify job reports a failed CI. `dependabot-automerge.yml` has no
 cancel step for the same reason: its `notify-failure` must run after `automerge` fails.
 
-Composite actions (reference them as `listepo/infra/.github/actions/<name>@<sha>`):
+Composite actions (reference them as `pyrlyn/infra/.github/actions/<name>@<sha>`):
 
 | Action | Purpose |
 | --- | --- |
@@ -59,19 +59,19 @@ Composite actions (reference them as `listepo/infra/.github/actions/<name>@<sha>
 | `macos-sign` | Developer ID codesign (or identity discovery for cargo-dist) + notarization |
 | `cancel-run` | cancel the current workflow run (last step, `if: failure()`); `actions: write` |
 
-Private repositories: no scans (CodeQL, Semgrep, Snyk, SonarCloud) by listepo policy.
+Private repositories: no scans (CodeQL, Semgrep, Snyk, SonarCloud) by pyrlyn policy.
 
 ## Referencing and pinning
 
 ```yaml
-uses: listepo/infra/.github/workflows/pipeline.yml@<full-sha> # main 2026-09-27
+uses: pyrlyn/infra/.github/workflows/pipeline.yml@<full-sha> # main 2026-09-27
 ```
 
 - Pin to a full commit SHA (optionally with a `# vX.Y.Z` comment once tags exist). Dependabot
   (`package-ecosystem: github-actions`) updates SHA-pinned reusable workflow refs like action
   refs, so the pin moves by pull request.
 - Inside this repository, workflows call each other with `$/.github/workflows/<file>` (GitHub's
-  self-repository syntax, July 2026): the nested call resolves to listepo/infra at the commit
+  self-repository syntax, July 2026): the nested call resolves to pyrlyn/infra at the commit
   the caller pinned, never to the caller's repository and never to `main`.
 - GitHub limits (github.com): 10 levels of nesting, 50 unique reusable workflows per run.
   The deepest chain here is caller -> pipeline.yml -> ci-rust.yml (3 levels).
@@ -125,7 +125,7 @@ concurrency:
 
 ## Free plan and private repositories
 
-listepo/infra is public, so any repository (public or private) can call it. Code scanning
+pyrlyn/infra is public, so any repository (public or private) can call it. Code scanning
 (uploading SARIF from CodeQL, Semgrep or Snyk) is free for public repositories only; private
 repositories need GitHub Code Security (formerly Advanced Security), which a personal Free
 plan does not have. For private callers pass `upload: false` (or `upload-sarif: false` to
@@ -135,7 +135,7 @@ Free, so `gate` is advisory there unless something `needs:` it.
 
 ## ci-rust.yml
 
-Rust comes from the caller's `mise.toml` (listepo convention) unless `rust-version` is set;
+Rust comes from the caller's `mise.toml` (pyrlyn convention) unless `rust-version` is set;
 every job fails if `rustc --version` is not the pinned version.
 
 | Input | Default | Notes |
@@ -207,7 +207,7 @@ permissions:
 
 jobs:
   pipeline:
-    uses: listepo/infra/.github/workflows/pipeline.yml@<sha> # main
+    uses: pyrlyn/infra/.github/workflows/pipeline.yml@<sha> # main
     permissions:
       contents: read
       security-events: write
@@ -232,7 +232,7 @@ recipes) sets `rust: false`, keeps its local `ci.yml`, and adds a local gate:
       && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ubuntu-latest
     steps:
-      - uses: listepo/infra/.github/actions/gate@<sha> # main
+      - uses: pyrlyn/infra/.github/actions/gate@<sha> # main
         with:
           needs: ${{ toJSON(needs) }}
 ```
@@ -252,7 +252,7 @@ on:
     branches: [main]
 jobs:
   release-plz:
-    uses: listepo/infra/.github/workflows/release-plz.yml@<sha> # main
+    uses: pyrlyn/infra/.github/workflows/release-plz.yml@<sha> # main
     permissions:
       contents: write
       pull-requests: write
@@ -284,7 +284,7 @@ permissions:
   contents: read
 jobs:
   release:
-    uses: listepo/infra/.github/workflows/release.yml@<sha> # main
+    uses: pyrlyn/infra/.github/workflows/release.yml@<sha> # main
     permissions:
       contents: write
       checks: read
@@ -362,7 +362,7 @@ jobs:
   automerge:
     needs: ci
     if: ${{ !cancelled() && github.actor == 'dependabot[bot]' }}
-    uses: listepo/infra/.github/workflows/dependabot-automerge.yml@<sha> # main
+    uses: pyrlyn/infra/.github/workflows/dependabot-automerge.yml@<sha> # main
     permissions:
       contents: write
       pull-requests: write
@@ -396,7 +396,7 @@ unless `soft-fail: false`.
 ```yaml
 jobs:
   sonarcloud:
-    uses: listepo/infra/.github/workflows/sonarcloud.yml@<sha> # main
+    uses: pyrlyn/infra/.github/workflows/sonarcloud.yml@<sha> # main
     permissions:
       contents: read
       pull-requests: read
@@ -433,7 +433,7 @@ requests").
       contents: write
       pull-requests: write
     steps:
-      - uses: listepo/infra/.github/actions/revert-on-failure@<sha> # main
+      - uses: pyrlyn/infra/.github/actions/revert-on-failure@<sha> # main
 ```
 
 ## macos-sign (composite action)
@@ -456,7 +456,7 @@ Outputs: `identity`, `signed`, `notarized`. `release.yml` uses it (`macos-sign` 
 In a cargo-dist `build-setup.yml`:
 
 ```yaml
-- uses: listepo/infra/.github/actions/macos-sign@<sha> # main
+- uses: pyrlyn/infra/.github/actions/macos-sign@<sha> # main
   if: runner.os == 'macOS'
   with:
     mode: discover

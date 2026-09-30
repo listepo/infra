@@ -1,6 +1,6 @@
 # Centralization candidates
 
-Audit of `.github/` and CI-related config across listepo's non-fork repositories on
+Audit of `.github/` and CI-related config across pyrlyn's non-fork repositories on
 2026-09-27 (default branches plus open PR heads). "diff" = changed lines between files after
 stripping comments and blank lines. Private repositories (airtalk-cli, budget-app, riverpod,
 shop-mvp, slint-dotnet) have no `.github/workflows` on their default branch; homebrew-tap,
@@ -176,7 +176,7 @@ ketch-registry and listepo have no `.github/` at all. There is no `listepo/.gith
 
 - Where: ketch `tap.yml` (dist custom publish job), rtok/dunnage via dist homebrew installer
 - Similarity: different mechanisms
-- Recommendation: later: reusable `homebrew-tap.yml` writing to listepo/homebrew-tap
+- Recommendation: later: reusable `homebrew-tap.yml` writing to pyrlyn/homebrew-tap
 
 ### crates.io publish
 
