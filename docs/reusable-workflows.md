@@ -84,6 +84,45 @@ uses: listepo/infra/.github/workflows/pipeline.yml@<full-sha> # main 2026-09-27
   `jdx/mise-action@*`, `Swatinem/rust-cache@*`, `taiki-e/install-action@*`,
   `snyk/actions/*`, `release-plz/action@*`.
 
+## Concurrency (only the newest run executes)
+
+Cancelling older runs is the caller's job: put a workflow-level `concurrency` in the thin
+caller, keyed by workflow and ref, so a new push cancels the older queued or in-progress run of
+the same workflow on the same branch or PR and the newest run runs to the end.
+
+```yaml
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+```
+
+- `cancel-in-progress: true` cancels older runs on every ref. The consumer callers here
+  (docs/migration) cancel on pull requests only: on the default branch each push keeps its
+  run, so `revert-on-failure` reverts the push that actually failed rather than the newest
+  one. Use `true` where no job acts on a single push.
+- The reusable workflows here set no `concurrency` of their own for CI (`ci.yml`,
+  `pipeline.yml`, `ci-rust.yml`, scans, `sonarcloud.yml`): inside a called workflow the
+  `github` context is the caller's, so a group built from `github.workflow` equals the
+  caller's group and cancels or deadlocks the caller (docs/github-limits.md), and a
+  cancel inside an older caller run fails its `gate` instead of cancelling the run cleanly.
+- `lint.yml` cancels older runs only when it runs directly in this repository; called, it
+  uses a group of its own run and never cancels.
+- This repository's own triggered workflows (`action-pins.yml`, `lint.yml`, `self-test.yml`)
+  use `group: ${{ github.workflow }}-${{ github.ref }}`, `cancel-in-progress: true`.
+- Release and bump are never cancelled mid-run: they push a version commit or tag and
+  dispatch publishing, and a cancel half-way can leave a pushed version with no release.
+  `bump.yml` (`release-${{ github.repository }}`) and `release-plz.yml`
+  (`release-plz-${{ github.repository }}`) set `cancel-in-progress: false`: a newer run waits,
+  and GitHub keeps only the newest pending run per group. `release.yml` sets nothing; its
+  caller should:
+
+```yaml
+# caller of release.yml / bump.yml (workflow_dispatch)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+```
+
 ## Free plan and private repositories
 
 listepo/infra is public, so any repository (public or private) can call it. Code scanning
