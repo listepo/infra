@@ -209,7 +209,8 @@ optional ` (#123)`) must match release-plz.toml's `pr_name`, e.g.
 `release-branch-prefix` (`""`; e.g. `release-plz-`) also requires the commit to come from a PR
 on such a branch, so a bump script's direct push with the same subject is not a merge.
 `verify-tools` (`""`; also on `bump.yml`) installs taiki-e/install-action tools (e.g.
-`nextest`) before `verify-command`.
+`nextest`) before `verify-command`. `verify-mise-install-args` (`""` = all of mise.toml)
+limits what mise installs on the verify runners (e.g. `rust`).
 Secret `RELEASE_PLZ_TOKEN` is required (fine-grained PAT, contents + pull requests write): a
 PR opened with `GITHUB_TOKEN` would run no CI. The merge is recognised by a commit line equal
 to `release: vX.Y.Z` (optionally ` (#123)`).

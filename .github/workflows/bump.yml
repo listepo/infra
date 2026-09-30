@@ -24,6 +24,11 @@ on:
         description: Bash run on every verify-os before releasing (e.g. `just check && just example`).
         type: string
         required: true
+      verify-mise-install-args:
+        description: mise install arguments for the verify jobs (empty = everything in mise.toml).
+        type: string
+        required: false
+        default: ""
       verify-tools:
         description: >-
           taiki-e/install-action tools installed before verify-command (e.g. `nextest`).
@@ -68,6 +73,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          install_args: ${{ inputs.verify-mise-install-args }}
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - if: inputs.verify-tools != ''
         uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
