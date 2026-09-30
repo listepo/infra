@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   pages:
-    uses: listepo/infra/.github/workflows/pages.yml@<SHA> # main
+    uses: pyrlyn/infra/.github/workflows/pages.yml@<SHA> # main
     permissions:
       contents: read
       pages: write
@@ -27,5 +27,5 @@ jobs:
     with:
       mise-install-args: node
       setup-command: HUGO_VERSION=0.165.0 bash site/install-hugo.sh
-      build-command: BASE_URL=https://listepo.github.io/ketch bash site/build.sh
+      build-command: BASE_URL=https://pyrlyn.github.io/ketch bash site/build.sh
       artifact-path: site/public

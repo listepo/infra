@@ -10,7 +10,7 @@ skip-drafts: true
 # SARIF upload to code scanning: auto = public repositories only (Free plan).
 upload-sarif: auto
 
-# `enabled`: true | false | auto (auto = public repositories only; listepo policy: no scans on
+# `enabled`: true | false | auto (auto = public repositories only; pyrlyn policy: no scans on
 # private repositories). `events`: run only for these github.event_name values (empty = all).
 rust:
   enabled: false

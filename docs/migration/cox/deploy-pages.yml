@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   pages:
-    uses: listepo/infra/.github/workflows/pages.yml@<SHA> # main
+    uses: pyrlyn/infra/.github/workflows/pages.yml@<SHA> # main
     permissions:
       contents: read
       pages: write

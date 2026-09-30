@@ -1,6 +1,6 @@
 name: ci-rust
 
-# Reusable Rust CI for listepo repositories.
+# Reusable Rust CI for pyrlyn repositories.
 #
 # - `fmt`: cargo fmt --check, once.
 # - `rust`: one job per entry of the shared target matrix (`SHARED_MATRIX` below, or the
@@ -9,7 +9,7 @@ name: ci-rust
 #   or a build of every target where it cannot (cross targets).
 # - `msrv`: `msrv-command` with the `msrv` toolchain, when `msrv` is set.
 #
-# The Rust toolchain comes from the caller's mise.toml (listepo convention: mise.toml is
+# The Rust toolchain comes from the caller's mise.toml (pyrlyn convention: mise.toml is
 # the single source of the Rust version). Pass `rust-version` to install an exact
 # toolchain through rustup instead. Either way the pinned version is exported as
 # RUSTUP_TOOLCHAIN and every job fails if `rustc --version` is anything else.
@@ -30,7 +30,7 @@ on:
         description: >-
           JSON array of matrix entries, each {"os": <runner label>, "target": <Rust target
           triple>}, optionally with "test": false to build instead of test. Empty (default)
-          uses the shared listepo matrix (SHARED_MATRIX below); pass a subset only when a
+          uses the shared pyrlyn matrix (SHARED_MATRIX below); pass a subset only when a
           target is not supported.
         type: string
         required: false

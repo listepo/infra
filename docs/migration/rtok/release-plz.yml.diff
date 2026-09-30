@@ -1,2 +1,2 @@
--    uses: listepo/infra/.github/workflows/release-plz.yml@189816ac5a375e18e0235044970efcbc40e3cabd
-+    uses: listepo/infra/.github/workflows/release-plz.yml@<SHA> # main
+-    uses: pyrlyn/infra/.github/workflows/release-plz.yml@189816ac5a375e18e0235044970efcbc40e3cabd
++    uses: pyrlyn/infra/.github/workflows/release-plz.yml@<SHA> # main
