@@ -11,8 +11,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Only the newest run per workflow and ref executes: a new push cancels the older queued or
+# in-progress run of this workflow on the same branch or PR. Not callable (no workflow_call),
+# so github.workflow is this file's own name.
 concurrency:
-  group: self-test-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -75,6 +78,14 @@ jobs:
       snyk-args: --all-projects
     secrets:
       SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+  # lint.yml through workflow_call: its called-path concurrency group (never cancels).
+  lint:
+    name: lint
+    uses: ./.github/workflows/lint.yml
+    permissions:
+      contents: read
+      actions: write # cancel-run on failure
 
   # The config-driven entrypoint with tests/fixtures/infra.yml.
   ci:
