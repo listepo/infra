@@ -48,6 +48,13 @@ on:
         type: string
         required: false
         default: ""
+      verify-tools:
+        description: >-
+          taiki-e/install-action tools installed before verify-command (e.g. `nextest`).
+          Empty skips.
+        type: string
+        required: false
+        default: ""
       verify-os:
         description: JSON array of runner labels for verify.
         type: string
@@ -192,6 +199,10 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: false
+      - if: inputs.verify-tools != ''
+        uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
+        with:
+          tool: ${{ inputs.verify-tools }}
       - name: verify
         shell: bash
         env:
