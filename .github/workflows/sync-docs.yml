@@ -1,6 +1,6 @@
 name: sync-docs
 
-# Publishes the caller's docs/ to the site repository (listepo/landing), the same job (parametrized) that
+# Publishes the caller's docs/ to the site repository (pyrlyn/landing), the same job (parametrized) that
 # rtok, ketch and cox each carried as sync-docs.yml:
 #   - <docs-dir>/site.md (the project card) -> content/projects/<repo name>.md; on a v* tag or
 #     release its `version:` front matter is set from the tag (v1.2.3 -> "1.2.3").
@@ -23,7 +23,7 @@ on:
         description: Site repository that receives the content.
         type: string
         required: false
-        default: listepo/landing
+        default: pyrlyn/landing
       site-branch:
         description: Branch of the site repository to push to.
         type: string
