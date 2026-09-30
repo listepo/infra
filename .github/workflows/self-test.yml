@@ -5,7 +5,8 @@ name: self-test
 # rust-version (plus the MSRV job). `pipeline` runs the gated pipeline (ci-rust, CodeQL,
 # Semgrep, Snyk) on this repository. The extras run their safe paths: sonarcloud without a
 # token (skips), dependabot-automerge on a non-Dependabot PR (every job skips),
-# revert-on-failure as a dry run of this PR's commits, macos-sign without secrets (skips).
+# revert-on-failure as a dry run of this PR's commits, macos-sign without secrets (skips),
+# the changes action (table test plus a live run), ci-dotnet.yml without a .NET project (no-op).
 # A change to a reusable workflow or action is exercised before any caller pins it.
 on:
   pull_request:
@@ -133,6 +134,39 @@ jobs:
         run: |
           echo "reverted=$REVERTED"
           [ "$REVERTED" = "true" ] || [ "$GITHUB_EVENT_NAME" != "pull_request" ]
+
+  # The changes action: the offline table test, then a live run on this event.
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: bash tests/changes/test.sh
+      - id: live
+        uses: ./.github/actions/changes
+      - name: Live outputs are booleans
+        env:
+          RUST: ${{ steps.live.outputs.rust }}
+          SWIFT: ${{ steps.live.outputs.swift_full }}
+          DOTNET_PRESENT: ${{ steps.live.outputs.dotnet_present }}
+        run: |
+          set -euo pipefail
+          for v in "$RUST" "$SWIFT" "$DOTNET_PRESENT"; do
+            [[ "$v" == true || "$v" == false ]] || { echo "not a boolean: '$v'"; exit 1; }
+          done
+          # This repository has no .NET project.
+          [ "$DOTNET_PRESENT" = false ]
+
+  # No .NET project here: the job must run, do nothing and pass.
+  dotnet:
+    name: dotnet (no project)
+    uses: ./.github/workflows/ci-dotnet.yml
+    permissions:
+      contents: read
+      actions: write # cancel-run on failure
 
   macos-sign:
     name: macos-sign (no secrets)

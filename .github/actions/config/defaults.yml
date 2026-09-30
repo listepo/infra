@@ -32,6 +32,24 @@ rust:
   msrv-command: cargo check $PACKAGE_ARGS --all-targets $FEATURE_ARGS
   timeout-minutes: 60
   cache-all-refs: false
+  # true: no work (the checks still pass) when no Rust file changed. A Cargo.toml/Cargo.lock
+  # change always runs everything, with `full-package-args` instead of `package-args`.
+  changed-only: false
+  full-package-args: --workspace
+
+# .NET tests (ci-dotnet.yml): a no-op job until the repository has a *.csproj/*.fsproj/
+# *.vbproj or *.sln/*.slnx, then `dotnet test` for every solution. A .NET dependency change
+# (project files, Directory.Packages.props, packages.lock.json, global.json, NuGet.config)
+# always runs the full suite.
+dotnet:
+  enabled: true
+  events: []
+  dotnet-version: ""     # "" = global.json, else the runner's SDK
+  working-directory: "."
+  test-command: ""       # "" = dotnet test for every solution (or project)
+  changed-only: false
+  runs-on: ubuntu-latest
+  timeout-minutes: 60
 
 codeql:
   enabled: auto

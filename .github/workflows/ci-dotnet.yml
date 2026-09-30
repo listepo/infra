@@ -1,0 +1,138 @@
+name: ci-dotnet
+
+# Reusable .NET CI. One job, `dotnet`, that always runs and always reports under that name:
+#
+# - No .NET project or solution in the repository (today: every pyrlyn repository): every
+#   step after the classification is a no-op and the job succeeds with a notice. The job
+#   starts testing by itself the day a *.csproj/*.fsproj/*.vbproj or *.sln/*.slnx lands.
+# - Otherwise: restore (locked mode when a packages.lock.json exists) and `dotnet test` for
+#   every solution, or every project when there is no solution. That is the full suite; a
+#   dependency change (*.csproj, *.fsproj, Directory.Packages.props, packages.lock.json,
+#   global.json, NuGet.config) always gets it, also with `changed-only`.
+#
+# The SDK comes from `dotnet-version`, else the repository's global.json, else the runner's
+# preinstalled SDK. Caller job permissions: contents: read, actions: write (cancel-run).
+on:
+  workflow_call:
+    inputs:
+      cancel-run-on-failure:
+        description: >-
+          When the job fails, cancel the whole workflow run. The calling job must grant
+          `actions: write`.
+        type: boolean
+        required: false
+        default: true
+      dotnet-version:
+        description: SDK for actions/setup-dotnet (e.g. "10.0.x"). Empty uses global.json.
+        type: string
+        required: false
+        default: ""
+      working-directory:
+        description: Directory searched for solutions and projects, relative to the root.
+        type: string
+        required: false
+        default: "."
+      test-command:
+        description: >-
+          Bash that runs the tests. Empty (default) runs `dotnet test` for every solution
+          under `working-directory`, or every project when there is none.
+        type: string
+        required: false
+        default: ""
+      changed-only:
+        description: >-
+          Skip the work (not the check) when the pull request or push changed no .NET file.
+          A .NET dependency change always runs the full suite.
+        type: boolean
+        required: false
+        default: false
+      runs-on:
+        description: Runner label.
+        type: string
+        required: false
+        default: ubuntu-latest
+      timeout-minutes:
+        description: Timeout of the job.
+        type: number
+        required: false
+        default: 60
+
+permissions:
+  contents: read
+  actions: write # cancel-run on failure
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+jobs:
+  dotnet:
+    name: dotnet
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - id: changes
+        uses: $/.github/actions/changes # nosemgrep: github-actions-mutable-action-tag
+
+      - id: scope
+        env:
+          PRESENT: ${{ steps.changes.outputs.dotnet_present }}
+          CHANGED: ${{ steps.changes.outputs.dotnet }}
+          CHANGED_ONLY: ${{ inputs.changed-only }}
+        run: |
+          set -euo pipefail
+          run=true
+          if [ "$PRESENT" != true ]; then
+            run=false
+            echo "::notice title=ci-dotnet::no .NET project or solution in the repository; nothing to test"
+          elif [ "$CHANGED_ONLY" = true ] && [ "$CHANGED" != true ]; then
+            run=false
+            echo "::notice title=ci-dotnet::no .NET file changed; tests skipped"
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+      - if: steps.scope.outputs.run == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - if: steps.scope.outputs.run == 'true' && inputs.dotnet-version != ''
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+
+      - if: >-
+          steps.scope.outputs.run == 'true' && inputs.dotnet-version == ''
+          && hashFiles('global.json') != ''
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      - name: Restore and test
+        if: steps.scope.outputs.run == 'true'
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          TEST_COMMAND: ${{ inputs.test-command }}
+        run: |
+          set -euo pipefail
+          dotnet --info
+          if [ -n "$TEST_COMMAND" ]; then eval "$TEST_COMMAND"; exit 0; fi
+          locked=()
+          if [ -n "$(git ls-files -- '*packages.lock.json')" ]; then locked=(--locked-mode); fi
+          mapfile -t targets < <(git ls-files -- '*.sln' '*.slnx')
+          if [ "${#targets[@]}" -eq 0 ]; then
+            mapfile -t targets < <(git ls-files -- '*.csproj' '*.fsproj' '*.vbproj')
+          fi
+          for t in "${targets[@]}"; do
+            echo "::group::$t"
+            dotnet restore "${locked[@]}" "$t"
+            dotnet test --no-restore "$t"
+            echo "::endgroup::"
+          done
+
+      - name: Cancel the run on failure
+        if: failure() && inputs.cancel-run-on-failure
+        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag

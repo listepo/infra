@@ -60,7 +60,10 @@ rust:       {enabled: false, events: [], matrix: [], rust-version: "", fmt-runs-
              working-directory: ".", mise-install-args: rust, clippy-args: "", tools: "",
              setup-command: "", test-command: "...", doc-tests: true, build-command: "...",
              package-args: --workspace, feature-args: --all-features, msrv: "",
-             msrv-command: "...", timeout-minutes: 60, cache-all-refs: false}
+             msrv-command: "...", timeout-minutes: 60, cache-all-refs: false,
+             changed-only: false, full-package-args: --workspace}
+dotnet:     {enabled: true, dotnet-version: "", working-directory: ".", test-command: "",
+             changed-only: false, runs-on: ubuntu-latest, timeout-minutes: 60}
 codeql:     {enabled: auto, languages: [actions], build-mode: none, build-command: "",
              queries: security-and-quality, config-file: "", runs-on: ubuntu-latest}
 semgrep:    {enabled: auto, config: p/default, extra-args: "", fail-on-findings: false}
@@ -91,4 +94,10 @@ jobs:                           # repository-specific jobs -> `ci / <name>`
 ```
 
 Unknown keys fail the `config` job (typos never silently disable a check).
+
+`dotnet` is on by default and costs one short job: it passes as a no-op until the repository
+has a .NET project, then runs the full `dotnet test` (ci-dotnet.yml). `rust.changed-only` and
+`dotnet.changed-only` skip the work, never the check, when the change has no file of that
+ecosystem; a dependency manifest or lock change always runs the full suite (see
+"Dependency-driven suite selection" in docs/reusable-workflows.md).
 Example: tests/fixtures/infra.yml (self-test), docs/migration/*/infra.yml.

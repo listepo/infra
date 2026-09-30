@@ -15,6 +15,12 @@ name: ci-rust
 # RUSTUP_TOOLCHAIN and every job fails if `rustc --version` is anything else.
 #
 # A failed job cancels the whole run (`cancel-run-on-failure`, on by default).
+#
+# `plan` classifies the changed files (the `changes` action). A change to any Cargo.toml or
+# Cargo.lock forces the full suite: `full-package-args` replaces `package-args`, and
+# `changed-only` cannot skip anything. With `changed-only` (off by default) a pull request
+# or push without Rust changes turns the work into no-ops; the jobs still report success
+# under their usual names, so required checks never wait on a skipped matrix.
 # Caller job permissions: contents: read, actions: write.
 on:
   workflow_call:
@@ -139,6 +145,22 @@ on:
         type: boolean
         required: false
         default: false
+      changed-only:
+        description: >-
+          Skip the work (not the check names) when the pull request or push changed no Rust
+          file (sources, Cargo manifests, lock file, toolchain or Cargo config). Off by
+          default: tests that read non-Rust files (docs, fixtures) would be skipped too.
+        type: boolean
+        required: false
+        default: false
+      full-package-args:
+        description: >-
+          Package selection used instead of `package-args` when a Cargo.toml or Cargo.lock
+          changed (or the run has no diff), so a dependency change always covers every
+          member. Empty keeps `package-args`.
+        type: string
+        required: false
+        default: --workspace
 
 permissions:
   contents: read
@@ -158,12 +180,15 @@ env:
     ]
 
 jobs:
-  # The matrix input, or the shared matrix when it is empty (strategy cannot read `env`).
+  # The matrix input, or the shared matrix when it is empty (strategy cannot read `env`);
+  # whether the jobs do any work (`run`) and which packages they cover (`package-args`).
   plan:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
       matrix: ${{ steps.m.outputs.matrix }}
+      run: ${{ steps.scope.outputs.run }}
+      package-args: ${{ steps.scope.outputs.package-args }}
     steps:
       - id: m
         env:
@@ -172,12 +197,39 @@ jobs:
           set -euo pipefail
           m="${INPUT_MATRIX:-$SHARED_MATRIX}"
           echo "matrix=$(jq -c . <<<"$m")" >> "$GITHUB_OUTPUT"
+      - id: changes
+        uses: $/.github/actions/changes # nosemgrep: github-actions-mutable-action-tag
+      # A dependency change (or no diff) widens the packages to `full-package-args` and
+      # always runs; `changed-only` skips only when no Rust file changed at all.
+      - id: scope
+        env:
+          CHANGED_ONLY: ${{ inputs.changed-only }}
+          FULL_PACKAGE_ARGS: ${{ inputs.full-package-args }}
+          RUST: ${{ steps.changes.outputs.rust }}
+          RUST_FULL: ${{ steps.changes.outputs.rust_full }}
+        run: |
+          set -euo pipefail
+          run=true
+          if [ "$CHANGED_ONLY" = true ] && [ "$RUST" != true ]; then run=false; fi
+          packages="$PACKAGE_ARGS"
+          if [ "$RUST_FULL" = true ] && [ -n "$FULL_PACKAGE_ARGS" ]; then
+            packages="$FULL_PACKAGE_ARGS"
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "package-args=$packages" >> "$GITHUB_OUTPUT"
+          echo "work: $run; packages: ${packages:-<root package>}"
+          if [ "$run" = false ]; then
+            echo "::notice title=ci-rust::no Rust file changed; fmt, clippy, tests and MSRV are no-ops"
+          fi
       - name: Cancel the run on failure
         if: failure() && inputs.cancel-run-on-failure
         uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag
 
   fmt:
     name: fmt
+    needs: plan
+    # Static name, so a skipped `fmt` still reports as `fmt` (skipped counts as passed).
+    if: needs.plan.outputs.run == 'true'
     runs-on: ${{ inputs.fmt-runs-on }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     defaults:
@@ -228,19 +280,24 @@ jobs:
         include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
+    # Never skipped at job level: that happens before the matrix expands and reports a single
+    # check under the raw expression name. With RUN=false every step is a no-op instead.
     env:
       TARGET: ${{ matrix.target }}
+      RUN: ${{ needs.plan.outputs.run }}
+      PACKAGE_ARGS: ${{ needs.plan.outputs.package-args }}
     defaults:
       run:
         shell: bash
         working-directory: ${{ inputs.working-directory }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - if: env.RUN == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       # Default path: the Rust version pinned in the caller's mise.toml.
-      - if: inputs.rust-version == ''
+      - if: env.RUN == 'true' && inputs.rust-version == ''
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
           working_directory: ${{ inputs.working-directory }}
@@ -249,7 +306,8 @@ jobs:
       # Make the pin the active toolchain for every later rustup/cargo call, add the
       # target, and fail if rustc is anything else (e.g. the runner image's own stable).
       # A target the runner cannot execute is a cross target: built, not tested.
-      - name: Use the pinned Rust and add the target
+      - if: env.RUN == 'true'
+        name: Use the pinned Rust and add the target
         env:
           RUST_VERSION: ${{ inputs.rust-version }}
           TEST: ${{ matrix.test }}
@@ -282,7 +340,8 @@ jobs:
           echo "NATIVE=$native" >> "$GITHUB_ENV"
           echo "host $host, target $TARGET, tests run: $native"
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - if: env.RUN == 'true'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ${{ inputs.working-directory }} -> target
           key: ${{ matrix.target }}
@@ -290,18 +349,19 @@ jobs:
             ${{ inputs.cache-all-refs
             || github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
 
-      - if: inputs.tools != ''
+      - if: env.RUN == 'true' && inputs.tools != ''
         uses: taiki-e/install-action@dfae9bf3d6f6c6f20ef4ebb3486c01a51341ff12 # v2.87.18
         with:
           tool: ${{ inputs.tools }}
 
       - name: Setup
-        if: inputs.setup-command != ''
+        if: env.RUN == 'true' && inputs.setup-command != ''
         env:
           SETUP_COMMAND: ${{ inputs.setup-command }}
         run: eval "$SETUP_COMMAND"
 
-      - name: clippy
+      - if: env.RUN == 'true'
+        name: clippy
         env:
           CLIPPY_ARGS: ${{ inputs.clippy-args }}
           FEATURE_ARGS: ${{ inputs.feature-args }}
@@ -311,7 +371,8 @@ jobs:
           cargo clippy $PACKAGE_ARGS --all-targets $FEATURE_ARGS $TARGET_ARGS $CLIPPY_ARGS \
             -- -D warnings
 
-      - name: check
+      - if: env.RUN == 'true'
+        name: check
         env:
           CLIPPY_ARGS: ${{ inputs.clippy-args }}
           FEATURE_ARGS: ${{ inputs.feature-args }}
@@ -320,14 +381,14 @@ jobs:
           cargo check $PACKAGE_ARGS --all-targets $FEATURE_ARGS $TARGET_ARGS $CLIPPY_ARGS
 
       - name: test
-        if: env.NATIVE == 'true' && inputs.test-command != ''
+        if: env.RUN == 'true' && env.NATIVE == 'true' && inputs.test-command != ''
         env:
           FEATURE_ARGS: ${{ inputs.feature-args }}
           TEST_COMMAND: ${{ inputs.test-command }}
         run: eval "$TEST_COMMAND"
 
       - name: doctests
-        if: env.NATIVE == 'true' && inputs.test-command != '' && inputs.doc-tests
+        if: env.RUN == 'true' && env.NATIVE == 'true' && inputs.test-command != '' && inputs.doc-tests
         run: |
           # The step shell runs with -e; keep going after a failure to inspect the log.
           set +e -uo pipefail
@@ -343,7 +404,7 @@ jobs:
           exit "$code"
 
       - name: build (cross target, not run)
-        if: env.NATIVE != 'true' && inputs.build-command != ''
+        if: env.RUN == 'true' && env.NATIVE != 'true' && inputs.build-command != ''
         env:
           BUILD_COMMAND: ${{ inputs.build-command }}
           FEATURE_ARGS: ${{ inputs.feature-args }}
@@ -355,9 +416,12 @@ jobs:
   msrv:
     # Static: GitHub shows the raw expression in the name of a skipped job.
     name: msrv
-    if: inputs.msrv != ''
+    needs: plan
+    if: inputs.msrv != '' && needs.plan.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
+    env:
+      PACKAGE_ARGS: ${{ needs.plan.outputs.package-args }}
     defaults:
       run:
         shell: bash

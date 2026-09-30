@@ -8,7 +8,7 @@ import os
 import re
 import sys
 
-CHECKS = ["rust", "codeql", "semgrep", "snyk", "sonarcloud", "lint"]
+CHECKS = ["rust", "dotnet", "codeql", "semgrep", "snyk", "sonarcloud", "lint"]
 JOB_DEFAULTS = {
     "enabled": True,
     "events": [],

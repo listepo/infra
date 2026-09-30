@@ -1,0 +1,89 @@
+name: changes
+
+# Reusable wrapper around the `changes` composite action: one ubuntu job that classifies the
+# changed files by ecosystem. A caller job `needs:` it and reads its outputs to pick suites,
+# e.g. `if: needs.changes.outputs.swift == 'true'`. `<eco>_full` means a dependency manifest
+# or lock file of that ecosystem changed (or the run is forced): run the full suite. Outputs
+# are the strings "true"/"false". Fails open: without a reliable diff every output is "true".
+#
+# Caller job permissions: contents: read.
+on:
+  workflow_call:
+    inputs:
+      rust-paths:
+        description: Extra extended regexes (one per line) whose changes count as Rust changes.
+        type: string
+        required: false
+        default: ""
+      swift-paths:
+        description: Extra extended regexes (one per line) whose changes count as Swift changes.
+        type: string
+        required: false
+        default: ""
+      dotnet-paths:
+        description: Extra extended regexes (one per line) whose changes count as .NET changes.
+        type: string
+        required: false
+        default: ""
+    outputs:
+      forced:
+        description: '"true" when every ecosystem runs in full (no diff, CI/toolchain change).'
+        value: ${{ jobs.changes.outputs.forced }}
+      rust:
+        description: '"true" when Rust files changed.'
+        value: ${{ jobs.changes.outputs.rust }}
+      rust_deps:
+        description: '"true" when a Cargo.toml or Cargo.lock changed.'
+        value: ${{ jobs.changes.outputs.rust_deps }}
+      rust_full:
+        description: '"true" when the full Rust suite must run.'
+        value: ${{ jobs.changes.outputs.rust_full }}
+      swift:
+        description: '"true" when Swift/Xcode files changed.'
+        value: ${{ jobs.changes.outputs.swift }}
+      swift_deps:
+        description: '"true" when Package.swift/Package.resolved/project.yml/project.pbxproj changed.'
+        value: ${{ jobs.changes.outputs.swift_deps }}
+      swift_full:
+        description: '"true" when the full Swift build and tests must run.'
+        value: ${{ jobs.changes.outputs.swift_full }}
+      dotnet:
+        description: '"true" when .NET files changed.'
+        value: ${{ jobs.changes.outputs.dotnet }}
+      dotnet_deps:
+        description: '"true" when a .NET project, central package, lock, global.json or NuGet.config file changed.'
+        value: ${{ jobs.changes.outputs.dotnet_deps }}
+      dotnet_full:
+        description: '"true" when the full .NET suite must run.'
+        value: ${{ jobs.changes.outputs.dotnet_full }}
+      dotnet_present:
+        description: '"true" when the repository has a .NET project or solution.'
+        value: ${{ jobs.changes.outputs.dotnet_present }}
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      forced: ${{ steps.changes.outputs.forced }}
+      rust: ${{ steps.changes.outputs.rust }}
+      rust_deps: ${{ steps.changes.outputs.rust_deps }}
+      rust_full: ${{ steps.changes.outputs.rust_full }}
+      swift: ${{ steps.changes.outputs.swift }}
+      swift_deps: ${{ steps.changes.outputs.swift_deps }}
+      swift_full: ${{ steps.changes.outputs.swift_full }}
+      dotnet: ${{ steps.changes.outputs.dotnet }}
+      dotnet_deps: ${{ steps.changes.outputs.dotnet_deps }}
+      dotnet_full: ${{ steps.changes.outputs.dotnet_full }}
+      dotnet_present: ${{ steps.changes.outputs.dotnet_present }}
+    steps:
+      - id: changes
+        uses: $/.github/actions/changes # nosemgrep: github-actions-mutable-action-tag
+        with:
+          rust-paths: ${{ inputs.rust-paths }}
+          swift-paths: ${{ inputs.swift-paths }}
+          dotnet-paths: ${{ inputs.dotnet-paths }}
