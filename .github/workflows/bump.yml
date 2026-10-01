@@ -8,10 +8,19 @@ name: bump
 # exception), so no PAT is needed.
 #
 # Caller job permissions: contents: write (version commit), actions: write (dispatch +
-# cancel-run). The caller owns `workflow_dispatch` with the `level` choice.
+# cancel-run), issues: write (notify-failure: a failed run opens a `release-failure` issue).
+# The caller owns `workflow_dispatch` with the `level` choice.
 on:
   workflow_call:
     inputs:
+      notify-maintainer:
+        description: >-
+          GitHub login mentioned and assigned on a `release-failure` issue when a job of this
+          workflow fails (.github/actions/notify-release-failure). Empty turns it off. The
+          calling job must grant `issues: write` either way.
+        type: string
+        required: false
+        default: listepo
       level:
         description: patch | minor | major, passed to the release script.
         type: string
@@ -123,3 +132,25 @@ jobs:
       - name: Cancel the run on failure
         if: failure() && !cancelled() && inputs.cancel-run-on-failure
         uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag
+
+  # A failed release opens (or comments on) a `release-failure` issue that mentions and assigns
+  # the maintainer: the only failure notification, since GitHub cannot filter Actions
+  # notifications per workflow. always(): cancel-run cancels the rest of the run after the
+  # first failure, and this job must run anyway.
+  notify-failure:
+    name: notify on failure
+    needs: [verify, bump]
+    if: >-
+      always() && inputs.notify-maintainer != ''
+      && contains(needs.*.result, 'failure')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read # failed job names
+      issues: write
+    steps:
+      - uses: $/.github/actions/notify-release-failure # nosemgrep: github-actions-mutable-action-tag
+        with:
+          ref: ${{ github.ref_name }}
+          needs: ${{ toJSON(needs) }}
+          maintainer: ${{ inputs.notify-maintainer }}

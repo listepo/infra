@@ -1,0 +1,106 @@
+name: notify-release-failure
+description: >-
+  Turn a failed release run into a GitHub issue in the same repository, labeled
+  `release-failure`, mentioning and assigning the maintainer, with the run link and the failed
+  job names. An open `release-failure` issue for the same ref gets a comment instead of a
+  duplicate. GitHub has no per-workflow notification filter, so this is how a release failure
+  (and only a release failure) reaches the maintainer. Needs `issues: write` and
+  `actions: read` on the job; runs on any runner with `gh` and `jq` (GitHub-hosted ones).
+inputs:
+  ref:
+    description: What was being released (a tag, or the branch); dedup key. Default github.ref_name.
+    required: false
+    default: ""
+  workflow:
+    description: Workflow name for the title. Default github.workflow.
+    required: false
+    default: ""
+  run-id:
+    description: Failed run (default github.run_id; set it from a workflow_run watcher).
+    required: false
+    default: ""
+  run-attempt:
+    description: Attempt of the failed run. Default github.run_attempt.
+    required: false
+    default: ""
+  sha:
+    description: Commit of the failed run. Default github.sha.
+    required: false
+    default: ""
+  needs:
+    description: >-
+      `toJSON(needs)` of the notifying job; fallback for the failed job names when the jobs
+      API is not readable.
+    required: false
+    default: "{}"
+  maintainer:
+    description: GitHub login mentioned and assigned.
+    required: false
+    default: listepo
+  label:
+    description: Label on the issue (created when missing).
+    required: false
+    default: release-failure
+  token:
+    description: "Token with `issues: write` and `actions: read`."
+    required: false
+    default: ${{ github.token }}
+runs:
+  using: composite
+  steps:
+    - name: Open or update the release-failure issue
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        GH_REPO: ${{ github.repository }}
+        REF: ${{ inputs.ref || github.ref_name }}
+        WORKFLOW: ${{ inputs.workflow || github.workflow }}
+        RUN_ID: ${{ inputs.run-id || github.run_id }}
+        RUN_ATTEMPT: ${{ inputs.run-attempt || github.run_attempt }}
+        SHA: ${{ inputs.sha || github.sha }}
+        NEEDS: ${{ inputs.needs }}
+        WHO: ${{ inputs.maintainer }}
+        LABEL: ${{ inputs.label }}
+      run: |
+        set -euo pipefail
+        run_url="$GITHUB_SERVER_URL/$GH_REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT"
+        # Matrix legs and nested jobs by their display names; `needs` is the fallback.
+        failed="$(gh api --paginate \
+          "repos/$GH_REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs" \
+          --jq '.jobs[] | select(.conclusion == "failure" or .conclusion == "timed_out")
+            | "- [\(.name)](\(.html_url)) (\(.conclusion))"' 2>/dev/null || true)"
+        if [ -z "$failed" ]; then
+          failed="$(jq -r 'to_entries[] | select(.value.result == "failure")
+            | "- \(.key) (failure)"' <<<"$NEEDS" 2>/dev/null || true)"
+        fi
+        [ -n "$failed" ] || failed="- (could not list the failed jobs; see the run)"
+
+        # One open issue per ref: the hidden marker, not the title, is the dedup key.
+        marker="<!-- release-failure ref=$REF -->"
+        gh label create "$LABEL" --color B60205 \
+          --description "A release workflow failed (opened by notify-release-failure)" \
+          >/dev/null 2>&1 || true
+        existing="$(gh issue list --state open --label "$LABEL" --limit 100 --json number,body \
+          | jq -r --arg m "$marker" '[.[] | select(.body | contains($m))][0].number // empty')"
+
+        # The backticks are Markdown, not shell.
+        # shellcheck disable=SC2016
+        {
+          printf '@%s %s failed for `%s`.\n\n' "$WHO" "$WORKFLOW" "$REF"
+          printf -- '- Run: %s\n- Commit: %s\n\nFailed jobs:\n%s\n' "$run_url" \
+            "$GITHUB_SERVER_URL/$GH_REPO/commit/$SHA" "$failed"
+        } > "$RUNNER_TEMP/release-failure.md"
+
+        if [ -n "$existing" ]; then
+          gh issue comment "$existing" --body-file "$RUNNER_TEMP/release-failure.md"
+          echo "::notice title=release failure::commented on #$existing ($REF)"
+        else
+          printf '\n%s\n' "$marker" >> "$RUNNER_TEMP/release-failure.md"
+          url="$(gh issue create --title "Release failed: $WORKFLOW $REF" --label "$LABEL" \
+            --body-file "$RUNNER_TEMP/release-failure.md")"
+          existing="${url##*/}"
+          echo "::notice title=release failure::opened $url"
+        fi
+        # Assigning can fail (not a collaborator); the mention still notifies.
+        gh issue edit "$existing" --add-assignee "$WHO" >/dev/null \
+          || echo "::warning::could not assign $WHO to #$existing"

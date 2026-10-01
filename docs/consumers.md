@@ -27,3 +27,10 @@ false. Before moving a pin past 416dbf9, change the calling job's permissions:
   `actions: write` too.
 - pipeline.yml callers (cox, ketch, rtok): `actions: read` -> `actions: write`.
 - release-plz.yml callers already grant `actions: write`.
+
+## Upgrading a pin past notify-release-failure
+
+`release.yml`, `release-plz.yml` and `bump.yml` end with a `notify-failure` job that asks for
+`issues: write` (a failed release opens a `release-failure` issue; docs/reusable-workflows.md,
+"Release failure notifications"). Before moving a pin of any of the three past it, add
+`issues: write` to the calling job's permissions, or the run fails at startup.

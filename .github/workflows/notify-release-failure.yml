@@ -1,0 +1,91 @@
+name: notify-release-failure
+
+# Reusable "a release failed" notifier: opens (or comments on) a `release-failure` issue in the
+# caller's repository that mentions and assigns the maintainer, with the run link and the failed
+# jobs (.github/actions/notify-release-failure). GitHub has no per-workflow notification
+# filter, so release workflows notify through this and personal Actions notifications stay off.
+#
+# Call it from the last job of a release workflow, gated on a failure of the release jobs:
+#
+#   notify-failure:
+#     needs: [plan, build, host]
+#     # always(): also after cancel-run cancelled the rest of the run.
+#     if: always() && contains(needs.*.result, 'failure')
+#     permissions:
+#       actions: read
+#       issues: write
+#     uses: pyrlyn/infra/.github/workflows/notify-release-failure.yml@<sha>
+#     with:
+#       ref: ${{ inputs.tag || github.ref_name }}
+#       needs: ${{ toJSON(needs) }}
+#
+# or from a `workflow_run` watcher (for a generated workflow that must not be edited), passing
+# run-id, run-attempt, workflow, ref and sha from github.event.workflow_run.
+#
+# Caller job permissions: actions: read (failed job names), issues: write.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: What was being released (tag or branch); one open issue per ref.
+        type: string
+        required: false
+        default: ""
+      workflow:
+        description: Workflow name in the title. Empty uses the caller's github.workflow.
+        type: string
+        required: false
+        default: ""
+      run-id:
+        description: Failed run id. Empty uses the caller's run.
+        type: string
+        required: false
+        default: ""
+      run-attempt:
+        description: Attempt of the failed run. Empty uses the caller's attempt.
+        type: string
+        required: false
+        default: ""
+      sha:
+        description: Commit of the failed run. Empty uses github.sha.
+        type: string
+        required: false
+        default: ""
+      needs:
+        description: "`toJSON(needs)` of the caller job; fallback for the failed job names."
+        type: string
+        required: false
+        default: "{}"
+      maintainer:
+        description: GitHub login mentioned and assigned.
+        type: string
+        required: false
+        default: listepo
+      label:
+        description: Issue label (created when missing).
+        type: string
+        required: false
+        default: release-failure
+
+permissions:
+  actions: read
+  issues: write
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      issues: write
+    steps:
+      - uses: $/.github/actions/notify-release-failure # nosemgrep: github-actions-mutable-action-tag
+        with:
+          ref: ${{ inputs.ref }}
+          workflow: ${{ inputs.workflow }}
+          run-id: ${{ inputs.run-id }}
+          run-attempt: ${{ inputs.run-attempt }}
+          sha: ${{ inputs.sha }}
+          needs: ${{ inputs.needs }}
+          maintainer: ${{ inputs.maintainer }}
+          label: ${{ inputs.label }}
