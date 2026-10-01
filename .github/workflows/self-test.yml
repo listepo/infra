@@ -6,7 +6,8 @@ name: self-test
 # Semgrep, Snyk) on this repository. The extras run their safe paths: sonarcloud without a
 # token (skips), dependabot-automerge on a non-Dependabot PR (every job skips),
 # revert-on-failure as a dry run of this PR's commits, macos-sign without secrets (skips),
-# the changes action (table test plus a live run), ci-dotnet.yml without a .NET project (no-op).
+# the changes action (table test plus a live run), ci-dotnet.yml without a .NET project (no-op),
+# failure-digest.sh against a fake gh.
 # A change to a reusable workflow or action is exercised before any caller pins it.
 on:
   pull_request:
@@ -170,6 +171,17 @@ jobs:
           done
           # This repository has no .NET project.
           [ "$DOTNET_PRESENT" = false ]
+
+  # The daily failure digest and the shared issue script, offline against a fake gh.
+  failure-digest:
+    name: failure-digest
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: bash tests/failure-digest/test.sh
 
   # No .NET project here: the job must run, do nothing and pass.
   dotnet:
