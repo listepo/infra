@@ -21,12 +21,15 @@ Shared reusable GitHub workflows and build configs for pyrlyn repositories
 | [`sync-docs.yml`](.github/workflows/sync-docs.yml) | publish docs/ to pyrlyn/landing |
 | [`pages.yml`](.github/workflows/pages.yml) | build a static site and deploy it to GitHub Pages |
 | [`bump.yml`](.github/workflows/bump.yml) | verify, then run the release script (bump + dispatch dist) |
+| [`notify-release-failure.yml`](.github/workflows/notify-release-failure.yml) | `release-failure` issue (mention + assign) when a release fails |
 | [`revert-on-failure.yml`](.github/workflows/revert-on-failure.yml) | revert a failed push to the default branch |
 
 Composite actions: [`gate`](.github/actions/gate/action.yml) (fail unless every needed job
 succeeded), [`revert-on-failure`](.github/actions/revert-on-failure/action.yml),
 [`macos-sign`](.github/actions/macos-sign/action.yml) and
-[`cancel-run`](.github/actions/cancel-run/action.yml) (cancel the whole run when a job fails).
+[`cancel-run`](.github/actions/cancel-run/action.yml) (cancel the whole run when a job fails)
+and [`notify-release-failure`](.github/actions/notify-release-failure/action.yml) (open or
+update a `release-failure` issue; release.yml, release-plz.yml and bump.yml run it on failure).
 `self-test.yml` runs ci-rust.yml and pipeline.yml against a fixture crate.
 
 See [docs/config.md](docs/config.md) for the config file and [docs/migration/](docs/migration/)

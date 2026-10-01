@@ -16,6 +16,7 @@ repository. All third-party actions are pinned to full commit SHAs.
 | `pipeline.yml` | ci-rust + CodeQL + Semgrep + Snyk in parallel behind a `gate` |
 | `release-plz.yml` | release PR; on its merge verify, then dispatch the release workflow |
 | `release.yml` | manual release: checks, verify, build, sign/notarize, smoke, Release, publish |
+| `notify-release-failure.yml` | open or update a `release-failure` issue for a failed release |
 | `dependabot-automerge.yml` | merge allowed Dependabot updates after green CI; label/flag others |
 | `sonarcloud.yml` | SonarCloud scan (+ Rust LCOV coverage); skipped without `SONAR_TOKEN` |
 
@@ -35,8 +36,12 @@ Secrets (declared in each workflow's `on.workflow_call.secrets`):
 - `changes.yml`: `contents: read`.
 - `codeql.yml`, `semgrep.yml`, `snyk.yml`, `pipeline.yml`: `contents: read`,
   `security-events: write` (SARIF upload), `actions: write`.
-- `release-plz.yml`: `contents: write`, `pull-requests: write`, `actions: write`.
-- `release.yml`: `contents: write` (tag + Release), `checks: read`, `actions: write`.
+- `release-plz.yml`: `contents: write`, `pull-requests: write`, `actions: write`,
+  `issues: write`.
+- `release.yml`: `contents: write` (tag + Release), `checks: read`, `actions: write`,
+  `issues: write`.
+- `bump.yml`: `contents: write`, `actions: write`, `issues: write`.
+- `notify-release-failure.yml`: `actions: read`, `issues: write`.
 - `dependabot-automerge.yml`: `contents: write`, `pull-requests: write`, `actions: read`.
 - `sonarcloud.yml`: `contents: read`, `pull-requests: read`, `actions: write`.
 
@@ -61,6 +66,7 @@ Composite actions (reference them as `pyrlyn/infra/.github/actions/<name>@<sha>`
 | `revert-on-failure` | revert a failed push, push the revert, open a draft re-apply PR |
 | `macos-sign` | Developer ID codesign (or identity discovery for cargo-dist) + notarization |
 | `cancel-run` | cancel the current workflow run (last step, `if: failure()`); `actions: write` |
+| `notify-release-failure` | `release-failure` issue (mention + assign) for a failed release run |
 | `changes` | changed files by ecosystem: `rust`/`swift`/`dotnet`, `*_deps`, `*_full`, `*_present` |
 
 Private repositories: no scans (CodeQL, Semgrep, Snyk, SonarCloud) by pyrlyn policy.
@@ -321,6 +327,44 @@ recipes) sets `rust: false`, keeps its local `ci.yml`, and adds a local gate:
           needs: ${{ toJSON(needs) }}
 ```
 
+## Release failure notifications
+
+GitHub cannot filter Actions notifications per workflow, so the maintainer's personal Actions
+notifications stay off and only release workflows notify, by issue. `release.yml`,
+`release-plz.yml` and `bump.yml` end with a `notify-failure` job (`if: always() &&
+contains(needs.*.result, 'failure')`; `always()` because `cancel-run` has cancelled the rest
+of the run by then) that runs the `notify-release-failure` action: it opens
+`Release failed: <workflow> <ref>` labeled `release-failure` (created when missing), mentions
+and assigns `notify-maintainer` (default `listepo`; empty turns it off), and lists the run link
+and the failed jobs. An open `release-failure` issue for the same ref (a hidden
+`<!-- release-failure ref=... -->` marker) gets a comment instead. The ref is the tag where
+one is known (`release.yml` `tag`, `release-plz.yml` on a release PR merge), else the branch.
+`release.yml` skips it on `dry-run`. Callers of these three must grant `issues: write`: GitHub
+rejects a nested job that asks for more than the caller grants, even with the input empty.
+
+Release workflows that live in the repository (cargo-dist's `release.yml`, a desktop release)
+call `notify-release-failure.yml` from a last job:
+
+```yaml
+  notify-failure:
+    needs: [plan, build-local-artifacts, build-global-artifacts, host, announce]
+    if: >-
+      always() && github.event_name != 'pull_request'
+      && contains(needs.*.result, 'failure')
+    permissions:
+      actions: read
+      issues: write
+    uses: pyrlyn/infra/.github/workflows/notify-release-failure.yml@<sha> # main
+    with:
+      ref: ${{ inputs.tag || github.ref_name }}
+      needs: ${{ toJSON(needs) }}
+```
+
+A dist `release.yml` without `allow-dirty = ["ci"]` must not be edited (`dist plan` fails); a
+separate `workflow_run` watcher calls it with `run-id`, `run-attempt`, `workflow`, `ref` and
+`sha` from `github.event.workflow_run` when `conclusion == 'failure'`. Ordinary CI never calls
+it.
+
 ## release-plz.yml
 
 On push to the default branch. Inputs: `tag-prefix` (`v`), `package` (`""` = first workspace
@@ -349,6 +393,7 @@ jobs:
       contents: write
       pull-requests: write
       actions: write
+      issues: write # notify-failure
     with:
       verify-command: just check
     secrets:
@@ -381,6 +426,7 @@ jobs:
       contents: write
       checks: read
       actions: write
+      issues: write # notify-failure
     with:
       tag: ${{ inputs.tag }}
       dry-run: ${{ inputs.dry-run }}

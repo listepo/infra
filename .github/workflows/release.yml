@@ -14,7 +14,8 @@ name: release
 # Repositories released with cargo-dist keep dist's generated release.yml (dist refuses a
 # hand-edited one) and use release-plz.yml / verify from here; this workflow is for the rest.
 #
-# Caller job permissions: contents: write (tag + Release), checks: read, actions: write.
+# Caller job permissions: contents: write (tag + Release), checks: read, actions: write,
+# issues: write (notify-failure: a failed release opens a `release-failure` issue).
 # Secrets (all optional; a missing one skips its step with a notice, except where an input
 # explicitly asks for it): MACOS_CERTIFICATE (base64 .p12 Developer ID Application),
 # MACOS_CERTIFICATE_PWD; notarization with APPSTORE_CONNECT_KEY (+ _KEY_ID, _ISSUER_ID) or
@@ -30,6 +31,14 @@ on:
         type: boolean
         required: false
         default: true
+      notify-maintainer:
+        description: >-
+          GitHub login mentioned and assigned on a `release-failure` issue when a job of this
+          workflow fails (.github/actions/notify-release-failure). Empty turns it off. The
+          calling job must grant `issues: write` either way.
+        type: string
+        required: false
+        default: listepo
       tag:
         description: Release tag, e.g. v1.2.3. A `-` suffix (v1.2.3-rc.1) marks a prerelease.
         type: string
@@ -540,3 +549,26 @@ jobs:
       - name: Cancel the run on failure
         if: failure() && inputs.cancel-run-on-failure
         uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag
+
+  # A failed release opens (or comments on) a `release-failure` issue that mentions and assigns
+  # the maintainer: the only failure notification, since GitHub cannot filter Actions
+  # notifications per workflow. always(): cancel-run cancels the rest of the run after the
+  # first failure, and this job must run anyway. A dry run is not a release.
+  notify-failure:
+    name: notify on failure
+    needs: [checks, verify, build, release, publish]
+    if: >-
+      always() && inputs.notify-maintainer != ''
+      && !inputs.dry-run
+      && contains(needs.*.result, 'failure')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read # failed job names
+      issues: write
+    steps:
+      - uses: $/.github/actions/notify-release-failure # nosemgrep: github-actions-mutable-action-tag
+        with:
+          ref: ${{ inputs.tag }}
+          needs: ${{ toJSON(needs) }}
+          maintainer: ${{ inputs.notify-maintainer }}

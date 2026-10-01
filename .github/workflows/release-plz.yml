@@ -15,7 +15,8 @@ name: release-plz
 # RELEASE_PLZ_TOKEN (fine-grained PAT: contents + pull requests, write) is required: a PR
 # opened with GITHUB_TOKEN starts no workflows, so it would be merged with no CI.
 #
-# Caller job permissions: contents: write, pull-requests: write, actions: write.
+# Caller job permissions: contents: write, pull-requests: write, actions: write, issues: write
+# (notify-failure: a failed run opens a `release-failure` issue).
 on:
   workflow_call:
     inputs:
@@ -26,6 +27,14 @@ on:
         type: boolean
         required: false
         default: true
+      notify-maintainer:
+        description: >-
+          GitHub login mentioned and assigned on a `release-failure` issue when a job of this
+          workflow fails (.github/actions/notify-release-failure). Empty turns it off. The
+          calling job must grant `issues: write` either way.
+        type: string
+        required: false
+        default: listepo
       tag-prefix:
         description: Tag prefix before the version, e.g. "v" or "my-crate-v".
         type: string
@@ -247,3 +256,30 @@ jobs:
       - name: Cancel the run on failure
         if: failure() && inputs.cancel-run-on-failure
         uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag
+
+  # A failed release opens (or comments on) a `release-failure` issue that mentions and assigns
+  # the maintainer: the only failure notification, since GitHub cannot filter Actions
+  # notifications per workflow. always(): cancel-run cancels the rest of the run after the
+  # first failure, and this job must run anyway.
+  # On a release PR merge the ref is the tag the dispatched release workflow gets, so both
+  # land on one issue.
+  notify-failure:
+    name: notify on failure
+    needs: [detect, release-pr, verify, dispatch]
+    if: >-
+      always() && inputs.notify-maintainer != ''
+      && contains(needs.*.result, 'failure')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read # failed job names
+      issues: write
+    steps:
+      - uses: $/.github/actions/notify-release-failure # nosemgrep: github-actions-mutable-action-tag
+        with:
+          ref: >-
+            ${{ needs.detect.outputs.merged == 'true'
+            && format('{0}{1}', inputs.tag-prefix, needs.detect.outputs.version)
+            || github.ref_name }}
+          needs: ${{ toJSON(needs) }}
+          maintainer: ${{ inputs.notify-maintainer }}
