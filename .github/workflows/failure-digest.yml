@@ -1,0 +1,65 @@
+name: failure-digest
+
+# Daily failure digest: one comment on this repository's "Daily failure digest" issue (label
+# failure-digest, assigned to the maintainer) that @mentions the maintainer, so GitHub sends one
+# email a day. It lists only the repositories where something failed in the last 24 hours:
+# failed, timed-out or never-started runs of default-branch pushes, tag pushes, schedule,
+# workflow_dispatch, release and workflow_run events (pull requests do not count), each run
+# with its workflow, branch or tag, link, failed jobs and Kyiv time, plus open release-failure
+# issues with activity in the window. A day without failures posts nothing at all.
+# The issue code is shared with notify-release-failure (.github/scripts/failure-digest.sh,
+# .github/actions/notify-release-failure/notify-issue.sh).
+#
+# 06:00 UTC is 09:00 in Kyiv in summer (EEST) and 08:00 in winter (EET); cron has no time zone.
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      repos:
+        description: Repositories to scan (owner/name, separated by spaces or commas).
+        type: string
+        required: false
+        default: ""
+      dry-run:
+        description: Print the digest in the log instead of posting it.
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # The scanned repositories; all public, so the GITHUB_TOKEN reads their Actions runs.
+  DIGEST_REPOS: pyrlyn/infra pyrlyn/rtok pyrlyn/ketch pyrlyn/cox pyrlyn/runa
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github
+      - name: Post the digest (only when something failed)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REPOS: ${{ inputs.repos || env.DIGEST_REPOS }}
+          DRY_RUN: ${{ inputs.dry-run && 'true' || 'false' }}
+          WHO: listepo
+          SINCE_HOURS: "24"
+          DIGEST_TZ: Europe/Kyiv
+          LABEL: failure-digest
+          RELEASE_LABEL: release-failure
+        run: bash .github/scripts/failure-digest.sh

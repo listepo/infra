@@ -75,14 +75,6 @@ runs:
         fi
         [ -n "$failed" ] || failed="- (could not list the failed jobs; see the run)"
 
-        # One open issue per ref: the hidden marker, not the title, is the dedup key.
-        marker="<!-- release-failure ref=$REF -->"
-        gh label create "$LABEL" --color B60205 \
-          --description "A release workflow failed (opened by notify-release-failure)" \
-          >/dev/null 2>&1 || true
-        existing="$(gh issue list --state open --label "$LABEL" --limit 100 --json number,body \
-          | jq -r --arg m "$marker" '[.[] | select(.body | contains($m))][0].number // empty')"
-
         # The backticks are Markdown, not shell.
         # shellcheck disable=SC2016
         {
@@ -91,16 +83,10 @@ runs:
             "$GITHUB_SERVER_URL/$GH_REPO/commit/$SHA" "$failed"
         } > "$RUNNER_TEMP/release-failure.md"
 
-        if [ -n "$existing" ]; then
-          gh issue comment "$existing" --body-file "$RUNNER_TEMP/release-failure.md"
-          echo "::notice title=release failure::commented on #$existing ($REF)"
-        else
-          printf '\n%s\n' "$marker" >> "$RUNNER_TEMP/release-failure.md"
-          url="$(gh issue create --title "Release failed: $WORKFLOW $REF" --label "$LABEL" \
-            --body-file "$RUNNER_TEMP/release-failure.md")"
-          existing="${url##*/}"
-          echo "::notice title=release failure::opened $url"
-        fi
-        # Assigning can fail (not a collaborator); the mention still notifies.
-        gh issue edit "$existing" --add-assignee "$WHO" >/dev/null \
-          || echo "::warning::could not assign $WHO to #$existing"
+        # One open issue per ref: the hidden marker, not the title, is the dedup key. The issue
+        # code is shared with the daily failure digest (.github/scripts/failure-digest.sh).
+        TITLE="Release failed: $WORKFLOW $REF" MARKER="<!-- release-failure ref=$REF -->" \
+          LABEL_COLOR=B60205 \
+          LABEL_DESCRIPTION="A release workflow failed (opened by notify-release-failure)" \
+          BODY_FILE="$RUNNER_TEMP/release-failure.md" \
+          bash "$GITHUB_ACTION_PATH/notify-issue.sh" >/dev/null
