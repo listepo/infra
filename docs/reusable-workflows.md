@@ -14,8 +14,9 @@ repository. All third-party actions are pinned to full commit SHAs.
 | `semgrep.yml` | Semgrep OSS (`p/default`), SARIF to code scanning |
 | `snyk.yml` | Snyk Open Source; skipped without a token |
 | `pipeline.yml` | ci-rust + CodeQL + Semgrep + Snyk in parallel behind a `gate` |
-| `release-plz.yml` | release PR; on its merge verify, then dispatch the release workflow |
-| `release.yml` | manual release: checks, verify, build, sign/notarize, smoke, Release, publish |
+| `bump.yml` | the only release path: version commit, PR, required checks, rebase merge, tag + Release, release build |
+| `release-plz.yml` | release PR only; never tags, releases or dispatches (bump does) |
+| `release.yml` | release build on bump's tag: checks, verify, build, sign/notarize, smoke, upload, publish |
 | `notify-release-failure.yml` | open or update a `release-failure` issue for a failed release |
 | `dependabot-automerge.yml` | merge allowed Dependabot updates after green CI; label/flag others |
 | `sonarcloud.yml` | SonarCloud scan (+ Rust LCOV coverage); skipped without `SONAR_TOKEN` |
@@ -23,6 +24,8 @@ repository. All third-party actions are pinned to full commit SHAs.
 Secrets (declared in each workflow's `on.workflow_call.secrets`):
 
 - `snyk.yml`, `pipeline.yml`: `SNYK_TOKEN` (optional).
+- `bump.yml`: `BUMP_TOKEN` (pass `RELEASE_PLZ_TOKEN`; opens the PR so its CI runs),
+  `CARGO_REGISTRY_TOKEN` (optional, `publish-command`).
 - `release-plz.yml`: `RELEASE_PLZ_TOKEN` (required).
 - `release.yml`: `MACOS_CERTIFICATE`, `MACOS_CERTIFICATE_PWD`, `APPSTORE_CONNECT_KEY`,
   `APPSTORE_CONNECT_KEY_ID`, `APPSTORE_CONNECT_ISSUER_ID`, `APPLE_ID`, `APPLE_TEAM_ID`,
@@ -38,9 +41,10 @@ Secrets (declared in each workflow's `on.workflow_call.secrets`):
   `security-events: write` (SARIF upload), `actions: write`.
 - `release-plz.yml`: `contents: write`, `pull-requests: write`, `actions: write`,
   `issues: write`.
-- `release.yml`: `contents: write` (tag + Release), `checks: read`, `actions: write`,
+- `release.yml`: `contents: write` (Release assets), `checks: read`, `actions: write`,
   `issues: write`.
-- `bump.yml`: `contents: write`, `actions: write`, `issues: write`.
+- `bump.yml`: `contents: write`, `pull-requests: write`, `actions: write`, `checks: read`,
+  `statuses: read`, `issues: write`.
 - `notify-release-failure.yml`: `actions: read`, `issues: write`.
 - `dependabot-automerge.yml`: `contents: write`, `pull-requests: write`, `actions: read`.
 - `sonarcloud.yml`: `contents: read`, `pull-requests: read`, `actions: write`.
@@ -119,8 +123,8 @@ concurrency:
   uses a group of its own run and never cancels.
 - This repository's own triggered workflows (`action-pins.yml`, `lint.yml`, `self-test.yml`)
   use `group: ${{ github.workflow }}-${{ github.ref }}`, `cancel-in-progress: true`.
-- Release and bump are never cancelled mid-run: they push a version commit or tag and
-  dispatch publishing, and a cancel half-way can leave a pushed version with no release.
+- Release and bump are never cancelled mid-run: bump merges a version commit, then tags it
+  and dispatches publishing, and a cancel half-way can leave a merged version with no tag.
   `bump.yml` (`release-${{ github.repository }}`) and `release-plz.yml`
   (`release-plz-${{ github.repository }}`) set `cancel-in-progress: false`: a newer run waits,
   and GitHub keeps only the newest pending run per group. `release.yml` sets nothing; its
@@ -338,7 +342,7 @@ of the run by then) that runs the `notify-release-failure` action: it opens
 and assigns `notify-maintainer` (default `listepo`; empty turns it off), and lists the run link
 and the failed jobs. An open `release-failure` issue for the same ref (a hidden
 `<!-- release-failure ref=... -->` marker) gets a comment instead. The ref is the tag where
-one is known (`release.yml` `tag`, `release-plz.yml` on a release PR merge), else the branch.
+one is known (`release.yml` `tag`), else the branch.
 `release.yml` skips it on `dry-run`. Callers of these three must grant `issues: write`: GitHub
 rejects a nested job that asks for more than the caller grants, even with the input empty.
 
@@ -365,45 +369,95 @@ separate `workflow_run` watcher calls it with `run-id`, `run-attempt`, `workflow
 `sha` from `github.event.workflow_run` when `conclusion == 'failure'`. Ordinary CI never calls
 it.
 
-## release-plz.yml
+## bump.yml
 
-On push to the default branch. Inputs: `tag-prefix` (`v`), `package` (`""` = first workspace
-package), `release-workflow` (`release.yml`, dispatched with `-f tag=<prefix><version>`),
-`verify-command`, `verify-os` (`["ubuntu-latest", "macos-latest"]`), `mise` (true).
-`release-commit-pattern` (ERE, group 1 = version; default matches `release: vX.Y.Z` with an
-optional ` (#123)`) must match release-plz.toml's `pr_name`, e.g.
-`'^chore: release v([0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.+-]*)( \(#[0-9]+\))?$'`.
-`release-branch-prefix` (`""`; e.g. `release-plz-`) also requires the commit to come from a PR
-on such a branch, so a bump script's direct push with the same subject is not a merge.
-`verify-tools` (`""`; also on `bump.yml`) installs taiki-e/install-action tools (e.g.
-`nextest`) before `verify-command`. `verify-mise-install-args` (`""` = all of mise.toml)
-limits what mise installs on the verify runners (e.g. `rust`).
-Secret `RELEASE_PLZ_TOKEN` is required (fine-grained PAT, contents + pull requests write): a
-PR opened with `GITHUB_TOKEN` would run no CI. The merge is recognised by a commit line equal
-to `release: vX.Y.Z` (optionally ` (#123)`).
+The one way a version is released, for every repository. Nothing else creates a release tag:
+not release-plz (`git_tag_enable = false`, `git_release_enable = false`, no `release` command),
+not cargo-dist (`dispatch-releases = true` + `create-release = false`: it only fills bump's
+draft Release), not a script (release scripts only make the local version commit).
+
+1. `<release-script> <level> --local` (or `release-plz update` with `release-plz-update: true`)
+   makes one version commit on top of the default branch.
+2. It is pushed to `release/bump-<tag>` and a PR into the default branch is opened. bump
+   waits until every required status check of the default branch's rules (read from
+   `GET /repos/{repo}/rules/branches/{branch}`, or `required-checks`) has concluded
+   `success`/`skipped`/`neutral` on the branch head.
+3. `gh pr merge --rebase --match-head-commit <head>` with `GITHUB_TOKEN` (no bypass actor, so
+   the rules decide). Rebase rewrites the SHA: the landed commit is read back from the PR's
+   `mergeCommit`, and must have the tested tree and the tested base as its only parent.
+4. Only then: the tag on that commit (git refs API), the GitHub Release (a draft unless
+   `release-draft: false`; notes from the version's CHANGELOG.md section), and every
+   `release-workflows` file dispatched with `--ref <tag> -f tag=<tag>` (a tag or Release made
+   with `GITHUB_TOKEN` triggers no `push: tags` / `release` workflow). Then `publish-command`.
+
+A failure, a timeout or a closed PR before the merge closes the PR, deletes the branch and
+fails the run (and opens a `release-failure` issue): no tag, no Release. If the default branch
+moves during the checks the branch is rebuilt on the new head (`max-attempts`, 3).
+`dry-run: true` opens the PR, waits for the checks and closes it. `release-untagged-head: true`
+releases an untagged version already on the default branch (nothing to commit) after its
+required checks are green; off by default, so such a version is never released by accident.
+
+GitHub limits it designs around:
+
+- `pull_request` CI never starts for a PR opened or pushed with `GITHUB_TOKEN`, and pyrlyn has
+  "Allow GitHub Actions to create and approve pull requests" off. So `BUMP_TOKEN` (the existing
+  `RELEASE_PLZ_TOKEN`) pushes the branch and opens the PR; the PR's own CI reports the checks.
+  It never merges (its owner may be a bypass actor). Without it, `GITHUB_TOKEN` opens the PR
+  and `ci-workflows` lists the workflows to dispatch on the branch (each needs
+  `workflow_dispatch`; check run names, e.g. `pipeline / gate` for a reusable call, are the
+  same for a dispatched run).
+- The repository must allow rebase merging (`allow_rebase_merge`), and the ruleset's
+  `pull_request` rule must list `rebase` in `allowed_merge_methods`.
 
 ```yaml
+name: Bump and release
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
+    inputs:
+      level:
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      dry-run:
+        type: boolean
+        default: false
+permissions:
+  contents: read
 jobs:
-  release-plz:
-    uses: pyrlyn/infra/.github/workflows/release-plz.yml@<sha> # main
+  bump:
+    uses: pyrlyn/infra/.github/workflows/bump.yml@<sha> # main
     permissions:
       contents: write
       pull-requests: write
       actions: write
+      checks: read
+      statuses: read
       issues: write # notify-failure
     with:
-      verify-command: just check
+      level: ${{ inputs.level }}
+      dry-run: ${{ inputs.dry-run }}
+      release-script: tools/release.sh
+      ci-workflows: |
+        pipeline.yml
     secrets:
-      RELEASE_PLZ_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+      BUMP_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
 ```
+
+## release-plz.yml
+
+On push to the default branch: open or refresh the release PR (`release-plz release-pr`),
+held back while the current version is untagged. It never releases: merging the PR tags
+nothing and dispatches nothing (the old `detect`/`verify`/`dispatch` jobs released without
+bump and are gone). Prefer bump.yml alone; a merged release PR leaves an untagged version that
+bump releases only with `release-untagged-head`. Inputs: `tag-prefix` (`v`), `package` (`""` =
+first workspace package), `mise` (true). Secret `RELEASE_PLZ_TOKEN` is required (fine-grained
+PAT, contents + pull requests write): a PR opened with `GITHUB_TOKEN` would run no CI.
 
 ## release.yml
 
-Manual release modeled on rtok (verify on the release commit, then build and publish). The
-caller owns `workflow_dispatch`:
+The release build for repositories not built with cargo-dist. bump.yml tags the merged commit,
+creates the draft Release and dispatches the caller's workflow with `--ref <tag> -f tag=<tag>`;
+this workflow never tags. The caller owns `workflow_dispatch`:
 
 ```yaml
 name: release
@@ -444,20 +498,21 @@ jobs:
       APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
 ```
 
-Stages: `checks` (tag valid and unused, `required-checks` concluded `success` on the commit,
+Stages: `checks` (the tag exists and names the commit the run is on, `required-checks`
+concluded `success` on it,
 publish secrets present when asked for) -> `verify` (`verify-command` on `verify-os`) ->
 `build` per `build-matrix` entry (`setup-command`, `build-command`, collect `bins` from
 `bin-dir`, codesign + notarize on macOS when `macos-sign` and the secrets exist, otherwise a
 notice unless `require-macos-sign`, `smoke-command` on native targets, `.tar.gz`/`.zip` +
-`.sha256`) -> `release` (`gh release create` at the tested commit: creates the tag; notes from
-`notes-command` or GitHub's generated notes; prerelease when the tag has a `-` suffix; `draft`)
+`.sha256`) -> `release` (uploads to bump's Release and publishes it; `notes-command` replaces
+bump's notes; prerelease when the tag has a `-` suffix; `draft` keeps it a draft)
 -> `publish` (`publish-crates` with `CARGO_REGISTRY_TOKEN`, and/or `publish-command` with
 `PUBLISH_TOKEN`, archives in `./dist`). `dry-run: true` stops after `build`.
 
-Repositories built with cargo-dist (rtok, ketch, dunnage, runa, cox) keep dist's generated
-`release.yml`: dist regenerates it and fails `dist plan` on a hand-edited copy. They use
-`release-plz.yml` (verify + dispatch of the dist workflow) from here and keep signing in dist's
-`build-setup.yml`.
+Repositories built with cargo-dist (rtok, ketch, dunnage, runa) keep dist's generated
+`release.yml`: dist regenerates it and fails `dist plan` on a hand-edited copy. Their
+dist-workspace.toml sets `dispatch-releases = true` and `create-release = false`, so the
+workflow bump dispatches uploads to bump's draft Release and undrafts it, and never tags.
 
 What stays in each repository: the thin callers above, `.github/dependabot.yml` (GitHub reads
 it only from the repository itself), repository-specific jobs (e.g. rtok's webui/wasm checks,

@@ -1,147 +1,550 @@
 name: bump
 
-# "Bump and release" for cargo-dist repositories (rtok, ketch; dunnage when re-enabled):
-# verify the commit, then run the repository's release script, which raises the version,
-# pushes one commit and dispatches the dist release workflow. Replaces bump.yml + verify.yml
-# in each repository; the version logic stays in the repository's script.
-# A workflow_dispatch sent with GITHUB_TOKEN starts the release workflow (the documented
-# exception), so no PAT is needed.
+# The one way a version is released: bump never pushes to the default branch and is the only
+# thing that creates a release tag.
 #
-# Caller job permissions: contents: write (version commit), actions: write (dispatch +
-# cancel-run), issues: write (notify-failure: a failed run opens a `release-failure` issue).
-# The caller owns `workflow_dispatch` with the `level` choice.
+#   prepare  `<release-script> <level> --local` (or `release-plz update`) makes ONE version
+#            commit on top of the default branch.
+#   pr       pushes it to `<branch-prefix><tag>` and opens a pull request into the default
+#            branch, starts `ci-workflows` on the branch (workflow_dispatch), and waits until
+#            every required status check of the default branch's rules has concluded on the
+#            branch head. A failure, a timeout or a closed PR stops here: no tag, no release.
+#   merge    `gh pr merge --rebase --match-head-commit <head>` with GITHUB_TOKEN, which is no
+#            bypass actor, so the rules decide. Rebase rewrites the SHA: the commit that
+#            landed is read back (`mergeCommit`), and must have the tested tree and the base
+#            the branch was cut from as its parent.
+#   tag      the tag on THAT commit (git refs API), then the GitHub Release (a draft by
+#            default: cargo-dist with `create-release = false` uploads to it and undrafts it),
+#            then `release-workflows` dispatched with `--ref <tag> -f tag=<tag>`. A tag or
+#            Release made with GITHUB_TOKEN starts no `push: tags` / `release` workflow, so the
+#            build is always dispatched explicitly.
+#   publish  `publish-command` (e.g. `cargo publish`), after the tag.
+#
+# If the default branch moves while the checks run, the branch is rebuilt on the new head and
+# checked again (`max-attempts`), so the tag always names a tested tree. Anything that fails
+# before the merge closes the PR and deletes the branch, then fails the run.
+#
+# Tokens. GITHUB_TOKEN merges, tags, releases and dispatches. A PR opened (or a branch pushed)
+# with GITHUB_TOKEN starts no `pull_request` workflow, and "Allow GitHub Actions to create and
+# approve pull requests" is off in pyrlyn, so pass `BUMP_TOKEN` (the existing
+# RELEASE_PLZ_TOKEN: contents + pull requests write): it pushes the branch and opens the PR, and
+# the repository's own pull_request CI reports the required checks. It is never used to merge
+# (its owner may be a ruleset bypass actor). Without BUMP_TOKEN, GITHUB_TOKEN opens the PR and
+# `ci-workflows` must list every workflow that reports a required check (each needs
+# `workflow_dispatch`).
+#
+# Repository settings: allow rebase merging (`allow_rebase_merge`), and the rules' pull_request
+# `allowed_merge_methods` must include `rebase`.
+#
+# Caller job permissions: contents: write, pull-requests: write, actions: write, checks: read,
+# statuses: read, issues: write (notify-failure). The caller owns `workflow_dispatch`.
 on:
   workflow_call:
     inputs:
-      notify-maintainer:
-        description: >-
-          GitHub login mentioned and assigned on a `release-failure` issue when a job of this
-          workflow fails (.github/actions/notify-release-failure). Empty turns it off. The
-          calling job must grant `issues: write` either way.
-        type: string
-        required: false
-        default: listepo
       level:
         description: patch | minor | major, passed to the release script.
         type: string
         required: true
-      release-script:
-        description: Script run as `<script> <level>` (e.g. tools/release.sh, scripts/release.sh).
-        type: string
-        required: true
-      verify-command:
-        description: Bash run on every verify-os before releasing (e.g. `just check && just example`).
-        type: string
-        required: true
-      verify-mise-install-args:
-        description: mise install arguments for the verify jobs (empty = everything in mise.toml).
-        type: string
-        required: false
-        default: ""
-      verify-tools:
+      dry-run:
         description: >-
-          taiki-e/install-action tools installed before verify-command (e.g. `nextest`).
-          Empty skips.
+          Open the PR and wait for its required checks, then close it: no merge, no tag, no
+          Release, nothing published.
+        type: boolean
+        required: false
+        default: false
+      release-untagged-head:
+        description: >-
+          When the version on the default branch is already untagged (nothing to commit),
+          release its head instead of failing: its required checks must be green (start them
+          with `ci-workflows`). Off by default, so an untagged version that bump did not cut
+          is never released by accident.
+        type: boolean
+        required: false
+        default: false
+      release-script:
+        description: >-
+          Script run as `<script> <level> <release-script-args>` from the repository root. It
+          must make at most one commit and push nothing; it may write `version=` to
+          $GITHUB_OUTPUT. Empty: use `release-plz-update`.
         type: string
         required: false
         default: ""
-      verify-os:
-        description: JSON list of runners for verify.
+      release-script-args:
+        description: Extra arguments for release-script.
         type: string
         required: false
-        default: '["ubuntu-latest", "macos-latest"]'
-      mise-install-args:
-        description: mise install arguments for the bump job (empty = everything in mise.toml).
+        default: --local
+      release-plz-update:
+        description: >-
+          Without release-script: `release-plz update` (release-plz.toml) writes the version
+          and changelog, committed as `commit-message`. `level` is not used then.
+        type: boolean
+        required: false
+        default: false
+      commit-message:
+        description: Commit subject for release-plz-update; `{version}` is replaced.
+        type: string
+        required: false
+        default: "release: v{version}"
+      package:
+        description: >-
+          Cargo package whose version names the release when the script does not print one.
+          Empty: the first workspace package.
         type: string
         required: false
         default: ""
-      cancel-run-on-failure:
-        description: "Cancel the whole run when a job fails (needs `actions: write`)."
+      tag-prefix:
+        description: Tag prefix before the version.
+        type: string
+        required: false
+        default: v
+      branch-prefix:
+        description: Bump branch prefix; the branch is `<branch-prefix><tag>`.
+        type: string
+        required: false
+        default: release/bump-
+      ci-workflows:
+        description: >-
+          Newline-separated workflow files (each with `workflow_dispatch`) that report the
+          required checks. Dispatched on the bump branch (`gh workflow run <file> --ref
+          <branch>`) when there is no BUMP_TOKEN, and on the default branch for
+          release-untagged-head. With BUMP_TOKEN the PR's pull_request CI reports them.
+        type: string
+        required: false
+        default: ""
+      required-checks:
+        description: >-
+          Newline-separated check names to wait for. Empty: the required status checks of the
+          default branch's rules (GET /repos/{repo}/rules/branches/{branch}).
+        type: string
+        required: false
+        default: ""
+      checks-timeout-minutes:
+        description: How long to wait for the required checks of one attempt.
+        type: number
+        required: false
+        default: 120
+      max-attempts:
+        description: Rebuilds of the bump branch when the default branch moves meanwhile.
+        type: number
+        required: false
+        default: 3
+      release-draft:
+        description: >-
+          Create the Release as a draft (cargo-dist `create-release = false` undrafts it once
+          the assets are up). False publishes it at once.
         type: boolean
         required: false
         default: true
+      release-workflows:
+        description: >-
+          Newline-separated workflow files dispatched after the tag with `--ref <tag> -f
+          tag=<tag>` (the release build). Empty dispatches nothing.
+        type: string
+        required: false
+        default: release.yml
+      notes-command:
+        description: >-
+          Bash that writes the Release notes to $NOTES_FILE (VERSION, TAG, SHA set). Empty:
+          the CHANGELOG.md section of the version, else GitHub's generated notes.
+        type: string
+        required: false
+        default: ""
+      publish-command:
+        description: >-
+          Bash run on the tagged commit after the tag, Release and dispatch (e.g. `cargo
+          publish -p mycrate --locked`). CARGO_REGISTRY_TOKEN, VERSION and TAG are set. Empty
+          skips.
+        type: string
+        required: false
+        default: ""
+      mise:
+        description: Install tools from the caller's mise.toml (jdx/mise-action).
+        type: boolean
+        required: false
+        default: true
+      mise-install-args:
+        description: mise install arguments (empty = everything in mise.toml).
+        type: string
+        required: false
+        default: ""
+      notify-maintainer:
+        description: >-
+          GitHub login mentioned and assigned on a `release-failure` issue when this workflow
+          fails (.github/actions/notify-release-failure). Empty turns it off. The calling job
+          must grant `issues: write` either way.
+        type: string
+        required: false
+        default: listepo
+    secrets:
+      BUMP_TOKEN:
+        description: >-
+          Pushes the bump branch and opens the PR so its pull_request CI runs (pass
+          RELEASE_PLZ_TOKEN). Never used to merge, tag or release.
+        required: false
+      CARGO_REGISTRY_TOKEN:
+        description: crates.io token for publish-command.
+        required: false
+    outputs:
+      tag:
+        description: The released tag (empty on a dry run).
+        value: ${{ jobs.bump.outputs.tag }}
+      sha:
+        description: The tagged commit on the default branch.
+        value: ${{ jobs.bump.outputs.sha }}
 
 permissions:
   contents: read
-  actions: write # cancel-run on failure
 
-# Never cancelled mid-run: a release pushes a version commit/tag and dispatches publishing, so
-# cancelling it half-way can leave a pushed version with no release. A newer run waits; GitHub
-# keeps only the newest pending run per group (an older pending one is cancelled before it
-# starts). The group is per repository, not github.workflow, which is the caller's name here.
+# Never cancelled mid-run: cancelling between the merge and the tag leaves an untagged version
+# commit. A newer run waits; GitHub keeps only the newest pending run per group. The group is
+# per repository, not github.workflow, which is the caller's name here.
 concurrency:
   group: release-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
-  verify:
-    strategy:
-      fail-fast: true
-      matrix:
-        os: ${{ fromJSON(inputs.verify-os) }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
-        with:
-          install_args: ${{ inputs.verify-mise-install-args }}
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - if: inputs.verify-tools != ''
-        uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
-        with:
-          tool: ${{ inputs.verify-tools }}
-      - name: Verify
-        shell: bash
-        env:
-          VERIFY: ${{ inputs.verify-command }}
-        run: bash -euo pipefail -c "$VERIFY"
-      - name: Cancel the run on failure
-        if: failure() && !cancelled() && inputs.cancel-run-on-failure
-        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag
-
   bump:
-    needs: verify
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 360
     permissions:
-      contents: write
-      actions: write
+      contents: write # bump branch, tag, Release
+      pull-requests: write # open, merge or close the bump PR
+      actions: write # dispatch ci-workflows and release-workflows
+      checks: read # required check runs
+      statuses: read # required commit statuses
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      sha: ${{ steps.merge.outputs.sha }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PUSH_TOKEN: ${{ secrets.BUMP_TOKEN || github.token }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # tags decide whether the current version was released
-          persist-credentials: true # the script pushes the version commit
-      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+          persist-credentials: true # fetches; pushes go to an explicit URL (PUSH_TOKEN)
+      - if: inputs.mise
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
           install_args: ${{ inputs.mise-install-args }}
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - name: Release
+      - if: inputs.release-script == '' && inputs.release-plz-update
+        uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
+        with:
+          tool: release-plz
+
+      - name: Version commit, PR and required checks
+        id: pr
         env:
-          GH_TOKEN: ${{ github.token }}
           LEVEL: ${{ inputs.level }}
           SCRIPT: ${{ inputs.release-script }}
+          SCRIPT_ARGS: ${{ inputs.release-script-args }}
+          RELEASE_PLZ: ${{ inputs.release-plz-update }}
+          COMMIT_MESSAGE: ${{ inputs.commit-message }}
+          PACKAGE: ${{ inputs.package }}
+          PREFIX: ${{ inputs.tag-prefix }}
+          BRANCH_PREFIX: ${{ inputs.branch-prefix }}
+          CI_WORKFLOWS: ${{ inputs.ci-workflows }}
+          REQUIRED: ${{ inputs.required-checks }}
+          TIMEOUT_MIN: ${{ inputs.checks-timeout-minutes }}
+          MAX_ATTEMPTS: ${{ inputs.max-attempts }}
+          UNTAGGED_HEAD: ${{ inputs.release-untagged-head }}
+          DRY_RUN: ${{ inputs.dry-run }}
+          HAS_BUMP_TOKEN: ${{ secrets.BUMP_TOKEN != '' }}
         run: |
           set -euo pipefail
-          case "$LEVEL" in patch|minor|major) ;; *) echo "::error::bad level $LEVEL"; exit 1 ;; esac
+          case "$LEVEL" in patch|minor|major) ;; *) echo "::error::bad level '$LEVEL'"; exit 1 ;; esac
+          R="$GITHUB_REPOSITORY"
+          default="$(gh api "repos/$R" --jq .default_branch)"
+          push_url="https://x-access-token:${PUSH_TOKEN}@github.com/$R.git"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          "./$SCRIPT" "$LEVEL"
-      - name: Cancel the run on failure
-        if: failure() && !cancelled() && inputs.cancel-run-on-failure
-        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag
+          if [ "$HAS_BUMP_TOKEN" != "true" ] && [ -z "$CI_WORKFLOWS" ]; then
+            echo "::warning::no BUMP_TOKEN and no ci-workflows: nothing will report the required checks"
+          fi
 
-  # A failed release opens (or comments on) a `release-failure` issue that mentions and assigns
-  # the maintainer: the only failure notification, since GitHub cannot filter Actions
-  # notifications per workflow. always(): cancel-run cancels the rest of the run after the
-  # first failure, and this job must run anyway.
+          # The checks the merge needs: the default branch's rules (rulesets), unless given.
+          if [ -z "$REQUIRED" ]; then
+            REQUIRED="$(gh api "repos/$R/rules/branches/$default" --jq \
+              '.[] | select(.type == "required_status_checks")
+               | .parameters.required_status_checks[].context' | sort -u)"
+          fi
+          if [ -z "$(tr -d '[:space:]' <<<"$REQUIRED")" ]; then
+            echo "::error::$default has no required status checks; set required-checks"
+            exit 1
+          fi
+          printf 'required checks:\n%s\n' "$REQUIRED"
+
+          # 0 = every required check passed (success, skipped or neutral), 1 = one failed or
+          # the wait timed out. Latest check run per name wins (a re-run supersedes a failure).
+          wait_checks() {
+            local sha="$1" deadline runs statuses name run st con state pending failed
+            deadline=$(( $(date +%s) + TIMEOUT_MIN * 60 ))
+            while :; do
+              runs="$(gh api --paginate "repos/$R/commits/$sha/check-runs?per_page=100" --jq \
+                '.check_runs[] | [.name, .status, (.conclusion // ""), (.started_at // "")] | @tsv')"
+              statuses="$(gh api --paginate "repos/$R/commits/$sha/statuses?per_page=100" --jq \
+                '.[] | [.context, .state] | @tsv')"
+              pending=""; failed=""
+              while IFS= read -r name; do
+                name="$(xargs <<<"$name")"
+                [ -n "$name" ] || continue
+                run="$(awk -F'\t' -v n="$name" '$1 == n' <<<"$runs" | sort -t$'\t' -k4 | tail -n1)"
+                if [ -n "$run" ]; then
+                  st="$(cut -f2 <<<"$run")"; con="$(cut -f3 <<<"$run")"
+                  if [ "$st" != "completed" ]; then pending+="$name ($st)"$'\n'
+                  else case "$con" in
+                    success|skipped|neutral) ;;
+                    *) failed+="$name ($con)"$'\n' ;;
+                  esac; fi
+                  continue
+                fi
+                # Commit statuses come newest first.
+                state="$(awk -F'\t' -v n="$name" '$1 == n { print $2; exit }' <<<"$statuses")"
+                case "$state" in
+                  success) ;;
+                  "" | pending) pending+="$name (${state:-missing})"$'\n' ;;
+                  *) failed+="$name ($state)"$'\n' ;;
+                esac
+              done <<<"$REQUIRED"
+              if [ -n "$failed" ]; then
+                printf '::error title=required checks::failed on %s:\n%s' "$sha" "$failed"
+                return 1
+              fi
+              [ -z "$pending" ] && { echo "required checks green on $sha"; return 0; }
+              if [ "$(date +%s)" -ge "$deadline" ]; then
+                printf '::error title=required checks::timed out on %s, still:\n%s' "$sha" "$pending"
+                return 1
+              fi
+              printf 'waiting on %s:\n%s' "$sha" "$pending"
+              sleep 30
+            done
+          }
+
+          dispatch_ci() {
+            local ref="$1" w
+            while IFS= read -r w; do
+              w="$(xargs <<<"$w")"
+              [ -n "$w" ] || continue
+              gh workflow run "$w" -R "$R" --ref "$ref"
+              echo "dispatched $w on $ref"
+            done <<<"$CI_WORKFLOWS"
+          }
+
+          attempt=0; pr=""
+          while :; do
+            attempt=$((attempt + 1))
+            if [ "$attempt" -gt "$MAX_ATTEMPTS" ]; then
+              echo "::error::$default kept moving during $MAX_ATTEMPTS attempts; run bump again"
+              exit 1
+            fi
+            git fetch --quiet --force --tags origin "$default"
+            git checkout --quiet -B "$default" "origin/$default"
+            base="$(git rev-parse HEAD)"
+            echo "attempt $attempt on $default $base"
+
+            out="$(mktemp)"
+            if [ -n "$SCRIPT" ]; then
+              # shellcheck disable=SC2086 # SCRIPT_ARGS is a word list
+              GITHUB_OUTPUT="$out" "./$SCRIPT" "$LEVEL" $SCRIPT_ARGS
+            elif [ "$RELEASE_PLZ" = "true" ]; then
+              release-plz update
+            else
+              echo "::error::set release-script or release-plz-update"; exit 1
+            fi
+            version="$(sed -n 's/^version=//p' "$out" | tail -n1)"
+            if [ -z "$version" ]; then
+              version="$(cargo metadata --no-deps --format-version 1 | jq -r --arg p "$PACKAGE" \
+                '[.packages[] | select($p == "" or .name == $p)][0].version')"
+            fi
+            [ -n "$version" ] && [ "$version" != "null" ] || { echo "::error::no version"; exit 1; }
+            tag="$PREFIX$version"
+            if [ "$RELEASE_PLZ" = "true" ] && [ -z "$SCRIPT" ] && [ -n "$(git status --porcelain)" ]; then
+              git add -A
+              git commit --quiet -m "${COMMIT_MESSAGE//\{version\}/$version}"
+            fi
+            [ -z "$(git status --porcelain)" ] || { echo "::error::the release step left changes"; git status; exit 1; }
+            if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+              echo "::error::$tag already exists"; exit 1
+            fi
+            commits="$(git rev-list --count "$base..HEAD")"
+            {
+              echo "version=$version"
+              echo "tag=$tag"
+              echo "base=$base"
+            } >>"$GITHUB_OUTPUT"
+
+            if [ "$commits" -eq 0 ]; then
+              # The version on the default branch is untagged and there is nothing to commit.
+              if [ "$UNTAGGED_HEAD" != "true" ]; then
+                echo "::error::$tag is on $default ($base) but untagged, and bump did not cut it." \
+                  "Re-run with release-untagged-head to release it as it stands."
+                exit 1
+              fi
+              dispatch_ci "$default"
+              wait_checks "$base"
+              echo "mode=head" >>"$GITHUB_OUTPUT"
+              echo "head=$base" >>"$GITHUB_OUTPUT"
+              break
+            fi
+            [ "$commits" -eq 1 ] || { echo "::error::the release step made $commits commits, not 1"; exit 1; }
+
+            head="$(git rev-parse HEAD)"
+            branch="$BRANCH_PREFIX$tag"
+            # Only the bump branch is ever force-pushed (a rebuild after the base moved).
+            git -c http.https://github.com/.extraheader= push --quiet --force "$push_url" \
+              "HEAD:refs/heads/$branch"
+            if [ -z "$pr" ]; then
+              pr="$(gh pr list -R "$R" --head "$branch" --state open --json number --jq '.[0].number // ""')"
+            fi
+            if [ -z "$pr" ]; then
+              body="$(printf '%s\n\n%s\n' \
+                "Version commit for \`$tag\`, opened by bump ([run]($GITHUB_SERVER_URL/$R/actions/runs/$GITHUB_RUN_ID))." \
+                "bump rebase-merges it once the required checks pass, then tags the commit that lands on \`$default\`. Do not merge or push by hand.")"
+              url="$(GH_TOKEN="$PUSH_TOKEN" gh pr create -R "$R" --base "$default" --head "$branch" \
+                --title "$(git log -1 --format=%s)" --body "$body")"
+              pr="${url##*/}"
+            fi
+            echo "pr=$pr" >>"$GITHUB_OUTPUT"
+            echo "branch=$branch" >>"$GITHUB_OUTPUT"
+            echo "PR #$pr ($branch) at $head"
+            # With BUMP_TOKEN the PR's own pull_request CI reports the checks.
+            [ "$HAS_BUMP_TOKEN" = "true" ] || dispatch_ci "$branch"
+            wait_checks "$head"
+            [ "$(gh pr view "$pr" -R "$R" --json state --jq .state)" = OPEN ] \
+              || { echo "::error::PR #$pr is no longer open"; exit 1; }
+            now="$(git ls-remote origin "refs/heads/$default" | cut -f1)"
+            if [ "$now" = "$base" ]; then
+              echo "mode=pr" >>"$GITHUB_OUTPUT"
+              echo "head=$head" >>"$GITHUB_OUTPUT"
+              break
+            fi
+            echo "::notice::$default moved ($base -> $now) during the checks; rebuilding the branch"
+          done
+
+      - name: Merge (rebase) and read back the landed commit
+        id: merge
+        if: ${{ !inputs.dry-run }}
+        env:
+          MODE: ${{ steps.pr.outputs.mode }}
+          PR: ${{ steps.pr.outputs.pr }}
+          HEAD_SHA: ${{ steps.pr.outputs.head }}
+          BASE: ${{ steps.pr.outputs.base }}
+          BRANCH: ${{ steps.pr.outputs.branch }}
+        run: |
+          set -euo pipefail
+          R="$GITHUB_REPOSITORY"
+          if [ "$MODE" = head ]; then
+            echo "sha=$HEAD_SHA" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # GITHUB_TOKEN is no bypass actor: the rules (checks, merge method) decide.
+          gh pr merge "$PR" -R "$R" --rebase --match-head-commit "$HEAD_SHA"
+          sha=""
+          for _ in $(seq 1 30); do
+            sha="$(gh pr view "$PR" -R "$R" --json state,mergeCommit \
+              --jq 'select(.state == "MERGED") | .mergeCommit.oid // ""')"
+            [ -n "$sha" ] && break
+            sleep 5
+          done
+          [ -n "$sha" ] || { echo "::error::PR #$PR is not merged"; exit 1; }
+          echo "sha=$sha" >>"$GITHUB_OUTPUT"
+          echo "merged=true" >>"$GITHUB_OUTPUT"
+          # Rebase gives the commit a new SHA; it must carry exactly what was tested.
+          tree() { gh api "repos/$R/git/commits/$1" --jq .tree.sha; }
+          parents="$(gh api "repos/$R/git/commits/$sha" --jq '[.parents[].sha] | join(" ")')"
+          if [ "$(tree "$sha")" != "$(tree "$HEAD_SHA")" ] || [ "$parents" != "$BASE" ]; then
+            echo "::error::$sha (parents $parents) is not the tested $HEAD_SHA on $BASE; not tagging"
+            exit 1
+          fi
+          echo "PR #$PR landed as $sha (tested $HEAD_SHA)"
+          gh api -X DELETE "repos/$R/git/refs/heads/$BRANCH" >/dev/null || true
+
+      - name: Tag, Release, release build
+        id: tag
+        if: ${{ !inputs.dry-run }}
+        env:
+          SHA: ${{ steps.merge.outputs.sha }}
+          TAG: ${{ steps.pr.outputs.tag }}
+          VERSION: ${{ steps.pr.outputs.version }}
+          DRAFT: ${{ inputs.release-draft }}
+          NOTES_COMMAND: ${{ inputs.notes-command }}
+          RELEASE_WORKFLOWS: ${{ inputs.release-workflows }}
+        run: |
+          set -euo pipefail
+          R="$GITHUB_REPOSITORY"
+          gh api "repos/$R/git/refs" -f ref="refs/tags/$TAG" -f sha="$SHA" >/dev/null
+          echo "tag=$TAG" >>"$GITHUB_OUTPUT"
+          echo "::notice title=bump::tagged $TAG at $SHA"
+
+          export NOTES_FILE="$RUNNER_TEMP/notes.md" VERSION TAG SHA
+          git fetch --quiet origin "$SHA"
+          if [ -n "$NOTES_COMMAND" ]; then
+            bash -euo pipefail -c "$NOTES_COMMAND"
+          else
+            # The version's CHANGELOG.md section: `## [1.2.3](...)`, `## 1.2.3 — date`, `## v1.2.3`.
+            git show "$SHA:CHANGELOG.md" 2>/dev/null | awk -v v="$VERSION" '
+              /^## / { if (on) exit
+                       h = $0; sub(/^## \[?v?/, "", h)
+                       if (index(h, v) == 1 && substr(h, length(v) + 1, 1) !~ /[0-9A-Za-z.+-]/) { on = 1; next } }
+              on { print }' >"$NOTES_FILE" || true
+          fi
+          args=(--verify-tag --title "$TAG")
+          if [ -s "$NOTES_FILE" ] && grep -q '[^[:space:]]' "$NOTES_FILE"; then
+            args+=(--notes-file "$NOTES_FILE")
+          else
+            args+=(--generate-notes)
+          fi
+          [[ "$VERSION" == *-* ]] && args+=(--prerelease)
+          [ "$DRAFT" = "true" ] && args+=(--draft)
+          gh release create "$TAG" -R "$R" "${args[@]}"
+
+          while IFS= read -r w; do
+            w="$(xargs <<<"$w")"
+            [ -n "$w" ] || continue
+            gh workflow run "$w" -R "$R" --ref "$TAG" -f "tag=$TAG"
+            echo "::notice title=bump::dispatched $w for $TAG"
+          done <<<"$RELEASE_WORKFLOWS"
+
+      - name: Publish
+        if: ${{ !inputs.dry-run && inputs.publish-command != '' }}
+        env:
+          SHA: ${{ steps.merge.outputs.sha }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.pr.outputs.version }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          PUBLISH_COMMAND: ${{ inputs.publish-command }}
+        run: |
+          set -euo pipefail
+          git checkout --quiet --detach "$SHA"
+          bash -euo pipefail -c "$PUBLISH_COMMAND"
+
+      # A dry run, or anything that failed before the merge: the PR never lands.
+      - name: Close the bump PR
+        if: >-
+          always() && steps.pr.outputs.pr != ''
+          && (inputs.dry-run || (failure() && steps.merge.outputs.merged != 'true'))
+        env:
+          PR: ${{ steps.pr.outputs.pr }}
+          BRANCH: ${{ steps.pr.outputs.branch }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          R="$GITHUB_REPOSITORY"
+          run="$GITHUB_SERVER_URL/$R/actions/runs/$GITHUB_RUN_ID"
+          if [ "$(gh pr view "$PR" -R "$R" --json state --jq .state)" != OPEN ]; then exit 0; fi
+          if [ "$DRY_RUN" = "true" ]; then msg="Dry run of bump ($run): checks done, not merged."
+          else msg="bump failed before the merge ($run): no tag, no release."; fi
+          gh pr close "$PR" -R "$R" --comment "$msg"
+          gh api -X DELETE "repos/$R/git/refs/heads/$BRANCH" >/dev/null || true
+
+  # A failed bump opens (or comments on) a `release-failure` issue that mentions and assigns the
+  # maintainer: the only failure notification, since GitHub cannot filter Actions
+  # notifications per workflow.
   notify-failure:
     name: notify on failure
-    needs: [verify, bump]
+    needs: [bump]
     if: >-
-      always() && inputs.notify-maintainer != ''
+      always() && inputs.notify-maintainer != '' && !inputs.dry-run
       && contains(needs.*.result, 'failure')
     runs-on: ubuntu-latest
     timeout-minutes: 5
