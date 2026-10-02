@@ -48,7 +48,7 @@ Inputs: `canonical-ref` (pyrlyn/infra ref the canonical files are read from, def
 file, default `false`), `header-exclude` (extra excluded paths, one per line),
 `cancel-run-on-failure` (default `true`).
 
-## Sync (pending)
+## Sync
 
 `license-kit sync` brings each target in line Dependabot-style: when the default branch
 differs from the canonical files, one commit lands on the long-lived `chore/license-sync`
@@ -56,12 +56,14 @@ branch (created from the default branch or fast-forwarded, never forced) and a p
 labelled `license` is opened unless one is already open from that branch. A target that
 already matches gets no commit and no pull request. Sync pull requests are drafts; set
 `auto-merge: true` on a target to open it ready for review with GitHub auto-merge (the
-`protect-main` ruleset's required checks gate the merge). The workflow that runs it (on push
-to main touching `licenses/`, weekly, and on demand) is not part of this change yet. It needs
-a token that can write to the targets, e.g. a fine-grained PAT or GitHub App token
-`LICENSE_SYNC_TOKEN` with Contents, Pull requests and Workflows read/write on the target
+`protect-main` ruleset's required checks gate the merge).
+[`license-sync.yml`](../.github/workflows/license-sync.yml)
+runs it on push to main touching `licenses/` and on demand (`workflow_dispatch`, with an
+optional `dry-run`). Writing needs the org secret `LICENSE_SYNC_TOKEN`, a fine-grained PAT or
+GitHub App token with Contents, Pull requests and Workflows read/write on the target
 repositories; the `GITHUB_TOKEN` cannot write to other repositories, and its pull requests
-would not trigger CI.
+would not trigger CI. Without the secret the run is a read-only dry run (the targets are
+public) that lists what would change and then fails with an error naming the missing secret.
 
 `license-kit automerge-decide` is the merge gate for such automation: it answers `merge` only
 for a ready (non-draft) pull request by `dependabot[bot]`, or one labelled `license` on a
