@@ -15,7 +15,7 @@ upload-sarif: auto
 rust:
   enabled: false
   events: []
-  matrix: []            # [] = ci-rust.yml's shared five-target matrix
+  matrix: []            # [] = ci-rust.yml's shared four-target matrix
   rust-version: ""
   fmt-runs-on: ubuntu-latest
   working-directory: "."

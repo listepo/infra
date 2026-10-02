@@ -159,7 +159,7 @@ every job fails if `rustc --version` is not the pinned version.
 
 | Input | Default | Notes |
 | --- | --- | --- |
-| `matrix` | `""` (shared five-target matrix) | JSON `[{"os", "target", "test"?}]` |
+| `matrix` | `""` (shared four-target matrix) | JSON `[{"os", "target", "test"?}]` |
 | `rust-version` | `""` | exact toolchain via rustup instead of mise |
 | `xcode-version` | `27` | Xcode selected on macOS jobs (`setup-xcode`); `""` = image default |
 | `working-directory` | `.` | Cargo workspace |
@@ -177,10 +177,10 @@ every job fails if `rustc --version` is not the pinned version.
 | `full-package-args` | `--workspace` | replaces `package-args` when a Cargo.toml/Cargo.lock changed |
 | `fmt-runs-on`, `mise-install-args`, `cache-all-refs`, `timeout-minutes` | | |
 
-The shared matrix runs the macOS targets on `xcode-27`, the only GitHub-hosted image with
-Xcode 27, and every macOS job selects Xcode `xcode-version` first (see
-[setup-xcode](#setup-xcode-composite-action)). A `matrix` entry on another macOS runner fails
-there unless it also passes an `xcode-version` that image has (or `""`).
+The shared matrix runs its one macOS target (arm64, `aarch64-apple-darwin`) on `xcode-27`,
+the only GitHub-hosted image with Xcode 27, and every macOS job selects Xcode `xcode-version`
+first (see [setup-xcode](#setup-xcode-composite-action)). A `matrix` entry on another macOS
+runner fails there unless it also passes an `xcode-version` that image has (or `""`).
 
 The `plan` job runs the `changes` action. A Cargo.toml or Cargo.lock change (or a run without
 a diff: schedule, workflow_dispatch, a `.github/` or `mise.toml` change) always runs the full
