@@ -94,6 +94,13 @@ Recommended: a dedicated **private repository `pyrlyn/cla-signatures`**, branch 
 and the repository must not be empty (create it with a README). Do not create `cla.json` by hand:
 the action creates it on the first run. Back it up like any legal record.
 
+## Turning the check on and off
+
+The check is off by default: the `cla` job runs only when the variable `CLA_ENABLED` is `true`
+(organization or repository variable, Settings > Secrets and variables > Actions > Variables).
+While it is unset the job is skipped, and a skipped check passes, so it never blocks a pull
+request. Set `CLA_ENABLED=true` only after the setup below is done.
+
 ## Setup (manual, by an organization owner)
 
 Nothing below has been done yet.

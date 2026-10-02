@@ -80,8 +80,11 @@ jobs:
     # recheck (`contains` is case-insensitive). Dependabot runs get no Actions secrets, and its
     # commits are in the allowlist anyway, so its pull requests skip the check (a skipped required
     # check counts as passed).
+    # Off switch: the check runs only when the repository or organization variable
+    # CLA_ENABLED is 'true'. Unset (the default) skips the job, and a skipped check passes.
     if: >-
-      github.actor != 'dependabot[bot]'
+      vars.CLA_ENABLED == 'true'
+      && github.actor != 'dependabot[bot]'
       && (github.event_name == 'pull_request_target'
       || (github.event_name == 'issue_comment' && github.event.issue.pull_request
       && (github.event.comment.body == 'recheck'
