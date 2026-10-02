@@ -1,16 +1,15 @@
 name: release-plz
 
-# Reusable release-plz flow (modeled on rtok/dunnage release-plz.yml). Call it on push to the
-# default branch:
+# Reusable release-plz flow: on push to the default branch, open or refresh a release PR with
+# release-plz (next version + changelog). Held back while the current version has no tag yet
+# (a release in flight).
 #
-# - `detect`: is this push the merge of a release PR? Only a commit line that *is* the PR title
-#   counts (`release-commit-pattern`, default `release: vX.Y.Z` with an optional squash suffix
-#   " (#123)"); with `release-branch-prefix`, only from a PR whose branch has that prefix.
-# - `release-pr`: otherwise, open or refresh the release PR with release-plz (next version +
-#   changelog). Held back while the current version has no tag yet (a release in flight).
-# - `verify`: on the merge, run `verify-command` on every OS in `verify-os`.
-# - `dispatch`: then start the caller's release workflow (`release-workflow`) with
-#   `-f tag=<tag-prefix><version>`. That workflow tags and publishes; release-plz does not.
+# It never releases: merging the release PR tags nothing, publishes nothing and dispatches
+# nothing. bump.yml is the only path to a tag and a GitHub Release (the earlier `detect` /
+# `verify` / `dispatch` jobs started the release build on a release PR merge and so released
+# without bump; they are gone). Prefer bump.yml alone: a merged release PR leaves an untagged
+# version on the default branch, which bump releases only with `release-untagged-head`.
+# release-plz.toml must keep `git_tag_enable = false` and `git_release_enable = false`.
 #
 # RELEASE_PLZ_TOKEN (fine-grained PAT: contents + pull requests, write) is required: a PR
 # opened with GITHUB_TOKEN starts no workflows, so it would be merged with no CI.
@@ -47,53 +46,11 @@ on:
         type: string
         required: false
         default: ""
-      release-workflow:
-        description: Caller workflow file dispatched after a release PR merge. Empty skips.
-        type: string
-        required: false
-        default: release.yml
-      verify-command:
-        description: Bash run on each `verify-os` before the dispatch. Empty skips verify.
-        type: string
-        required: false
-        default: ""
-      verify-mise-install-args:
-        description: mise install arguments for the verify jobs (empty = everything in mise.toml).
-        type: string
-        required: false
-        default: ""
-      verify-tools:
-        description: >-
-          taiki-e/install-action tools installed before verify-command (e.g. `nextest`).
-          Empty skips.
-        type: string
-        required: false
-        default: ""
-      verify-os:
-        description: JSON array of runner labels for verify.
-        type: string
-        required: false
-        default: '["ubuntu-latest", "macos-latest"]'
       mise:
         description: Install tools from the caller's mise.toml (jdx/mise-action) in every job.
         type: boolean
         required: false
         default: true
-      release-commit-pattern:
-        description: >-
-          Extended regex a commit message line must match for the push to count as a release PR
-          merge; group 1 is the version. Match release-plz.toml's `pr_name`.
-        type: string
-        required: false
-        default: '^release: v([0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.+-]*)( \(#[0-9]+\))?$'
-      release-branch-prefix:
-        description: >-
-          Also require the commit to belong to a pull request whose head branch starts with
-          this (e.g. `release-plz-`), so a direct push with the same subject (a bump script)
-          is not taken for a merge. Empty skips the check.
-        type: string
-        required: false
-        default: ""
     secrets:
       RELEASE_PLZ_TOKEN:
         description: "Fine-grained PAT (contents + pull requests: write). Not GITHUB_TOKEN: a PR opened with it runs no CI."
@@ -103,56 +60,15 @@ permissions:
   contents: read
   actions: write # cancel-run on failure
 
-# Never cancelled mid-run: a release pushes a version commit/tag and dispatches publishing, so
-# cancelling it half-way can leave a pushed version with no release. A newer run waits; GitHub
-# keeps only the newest pending run per group (an older pending one is cancelled before it
+# Never cancelled mid-run: release-plz pushes the release branch and edits the PR in steps.
+# A newer run waits; GitHub keeps only the newest pending run per group (an older pending one is cancelled before it
 # starts). The group is per repository, not github.workflow, which is the caller's name here.
 concurrency:
   group: release-plz-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
-  detect:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    outputs:
-      merged: ${{ steps.check.outputs.merged }}
-      version: ${{ steps.check.outputs.version }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - id: check
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RE: ${{ inputs.release-commit-pattern }}
-          BRANCH_PREFIX: ${{ inputs.release-branch-prefix }}
-        run: |
-          set -euo pipefail
-          line="$(git log -1 --format=%B | grep -E "$RE" | head -n1 || true)"
-          if [ -n "$line" ] && [ -n "$BRANCH_PREFIX" ]; then
-            prs="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq \
-              "[.[] | select(.head.ref | startswith(\"$BRANCH_PREFIX\"))] | length")"
-            if [ "$prs" -eq 0 ]; then
-              echo "'$line' is not from a $BRANCH_PREFIX* pull request; not a release PR merge"
-              line=""
-            fi
-          fi
-          if [ -n "$line" ]; then
-            version="$(sed -E "s/$RE/\1/" <<<"$line")"
-            echo "merged=true" >> "$GITHUB_OUTPUT"
-            echo "version=$version" >> "$GITHUB_OUTPUT"
-            echo "release PR merge for $version"
-          else
-            echo "merged=false" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Cancel the run on failure
-        if: failure() && inputs.cancel-run-on-failure
-        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag
-
   release-pr:
-    needs: detect
-    if: needs.detect.outputs.merged != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -200,72 +116,13 @@ jobs:
         if: failure() && inputs.cancel-run-on-failure
         uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag
 
-  verify:
-    needs: detect
-    if: needs.detect.outputs.merged == 'true' && inputs.verify-command != ''
-    strategy:
-      fail-fast: true
-      matrix:
-        os: ${{ fromJSON(inputs.verify-os) }}
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - if: inputs.mise
-        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
-        with:
-          install_args: ${{ inputs.verify-mise-install-args }}
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          save-if: false
-      - if: inputs.verify-tools != ''
-        uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
-        with:
-          tool: ${{ inputs.verify-tools }}
-      - name: verify
-        shell: bash
-        env:
-          VERIFY_COMMAND: ${{ inputs.verify-command }}
-        run: eval "$VERIFY_COMMAND"
-      - name: Cancel the run on failure
-        if: failure() && inputs.cancel-run-on-failure
-        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag
-
-  dispatch:
-    needs: [detect, verify]
-    # verify may be skipped (no verify-command); it must not have failed.
-    if: >-
-      !cancelled() && needs.detect.outputs.merged == 'true' && inputs.release-workflow != ''
-      && (needs.verify.result == 'success' || needs.verify.result == 'skipped')
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      actions: write
-    steps:
-      # workflow_dispatch with GITHUB_TOKEN is the documented exception: it does start a run.
-      - name: Start the release workflow
-        env:
-          GH_TOKEN: ${{ github.token }}
-          WORKFLOW: ${{ inputs.release-workflow }}
-          TAG: ${{ inputs.tag-prefix }}${{ needs.detect.outputs.version }}
-          REF: ${{ github.ref_name }}
-        run: |
-          gh workflow run "$WORKFLOW" -R "$GITHUB_REPOSITORY" --ref "$REF" -f "tag=$TAG"
-          echo "::notice title=release::dispatched $WORKFLOW for $TAG on $REF"
-      - name: Cancel the run on failure
-        if: failure() && inputs.cancel-run-on-failure
-        uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag
-
   # A failed release opens (or comments on) a `release-failure` issue that mentions and assigns
   # the maintainer: the only failure notification, since GitHub cannot filter Actions
   # notifications per workflow. always(): cancel-run cancels the rest of the run after the
   # first failure, and this job must run anyway.
-  # On a release PR merge the ref is the tag the dispatched release workflow gets, so both
-  # land on one issue.
   notify-failure:
     name: notify on failure
-    needs: [detect, release-pr, verify, dispatch]
+    needs: [release-pr]
     if: >-
       always() && inputs.notify-maintainer != ''
       && contains(needs.*.result, 'failure')
@@ -277,9 +134,6 @@ jobs:
     steps:
       - uses: $/.github/actions/notify-release-failure # nosemgrep: github-actions-mutable-action-tag
         with:
-          ref: >-
-            ${{ needs.detect.outputs.merged == 'true'
-            && format('{0}{1}', inputs.tag-prefix, needs.detect.outputs.version)
-            || github.ref_name }}
+          ref: ${{ github.ref_name }}
           needs: ${{ toJSON(needs) }}
           maintainer: ${{ inputs.notify-maintainer }}

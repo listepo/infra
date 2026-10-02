@@ -1,20 +1,23 @@
 name: release
 
-# Reusable manual release, modeled on rtok's flow (bump.yml / release-plz.yml -> verify.yml ->
-# release.yml). The caller owns the `workflow_dispatch` trigger and passes the tag. Stages:
+# Reusable release build for repositories not built with cargo-dist. bump.yml is the only thing
+# that creates the tag and the GitHub Release (a draft): after the bump PR has merged it
+# dispatches the caller's release workflow with `--ref <tag> -f tag=<tag>`, so this workflow
+# runs on the tagged commit and never tags. Stages:
 #
-#   checks  -> required check runs green on the commit, tag free, publish secrets present
+#   checks  -> the tag exists and names the commit this run is on, required check runs green
+#              on it, publish secrets present
 #   verify  -> `verify-command` on every OS in `verify-os` (same gate as CI)
 #   build   -> `build-command` per {os, target}; macOS codesign + notarization (optional);
 #              `smoke-command` on targets the runner executes natively; archives + sha256
-#   release -> GitHub Release (creates the tag at the tested commit), notes, all archives
+#   release -> uploads all archives to bump's Release for the tag and publishes it
 #   publish -> `cargo publish` (publish-crates) and/or a generic `publish-command`
 #
-# `dry-run: true` runs checks, verify and build, and stops before anything is created.
-# Repositories released with cargo-dist keep dist's generated release.yml (dist refuses a
-# hand-edited one) and use release-plz.yml / verify from here; this workflow is for the rest.
+# `dry-run: true` runs checks, verify and build on any ref, and stops before anything is
+# uploaded. Repositories released with cargo-dist keep dist's generated release.yml (with
+# `dispatch-releases = true` and `create-release = false`, so it fills bump's draft).
 #
-# Caller job permissions: contents: write (tag + Release), checks: read, actions: write,
+# Caller job permissions: contents: write (Release assets), checks: read, actions: write,
 # issues: write (notify-failure: a failed release opens a `release-failure` issue).
 # Secrets (all optional; a missing one skips its step with a notice, except where an input
 # explicitly asks for it): MACOS_CERTIFICATE (base64 .p12 Developer ID Application),
@@ -40,11 +43,13 @@ on:
         required: false
         default: listepo
       tag:
-        description: Release tag, e.g. v1.2.3. A `-` suffix (v1.2.3-rc.1) marks a prerelease.
+        description: >-
+          Release tag made by bump.yml, e.g. v1.2.3 (dispatch with `--ref <tag>`). A `-`
+          suffix (v1.2.3-rc.1) marks a prerelease.
         type: string
         required: true
       dry-run:
-        description: Build and verify only; create no tag, Release or publication.
+        description: Build and verify only; upload, publish and release nothing.
         type: boolean
         required: false
         default: false
@@ -142,13 +147,13 @@ on:
         default: false
       notes-command:
         description: >-
-          Bash that writes Release notes to $NOTES_FILE (e.g. git-cliff --latest). Empty uses
-          GitHub's generated notes.
+          Bash that writes Release notes to $NOTES_FILE (e.g. git-cliff --latest), replacing
+          bump's. Empty keeps the notes bump.yml wrote.
         type: string
         required: false
         default: ""
       draft:
-        description: Create the Release as a draft.
+        description: Leave bump's Release a draft after the upload.
         type: boolean
         required: false
         default: false
@@ -233,10 +238,18 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$TAG" =~ ^[A-Za-z0-9._/+-]+$ ]] || { echo "invalid tag '$TAG'" >&2; exit 1; }
-          if [ "$DRY_RUN" != "true" ] \
-            && gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
-            echo "::error title=release::tag $TAG already exists"
-            exit 1
+          if [ "$DRY_RUN" != "true" ]; then
+            # bump.yml tags the merged commit and dispatches this run on the tag; nothing
+            # here creates one.
+            obj="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.type + " " + .object.sha' 2>/dev/null || true)"
+            [ -n "$obj" ] || { echo "::error title=release::tag $TAG does not exist; release with bump"; exit 1; }
+            if [ "${obj%% *}" = tag ]; then
+              obj="commit $(gh api "repos/$GITHUB_REPOSITORY/git/tags/${obj#* }" --jq .object.sha)"
+            fi
+            if [ "${obj#* }" != "$GITHUB_SHA" ]; then
+              echo "::error title=release::$TAG is ${obj#* }, this run is on $GITHUB_SHA; dispatch with --ref $TAG"
+              exit 1
+            fi
           fi
           pre=false
           [[ "${TAG##*/}" == *-* ]] && pre=true
@@ -488,7 +501,7 @@ jobs:
           export NOTES_FILE="$RUNNER_TEMP/notes.md"
           eval "$NOTES_COMMAND"
           echo "NOTES_FILE=$NOTES_FILE" >> "$GITHUB_ENV"
-      - name: Create the GitHub Release (and the tag)
+      - name: Upload to bump's Release and publish it
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.checks.outputs.tag }}
@@ -499,12 +512,13 @@ jobs:
           shopt -s nullglob
           (cd dist && cat ./*.sha256 > SHA256SUMS)
           files=(dist/*.tar.gz dist/*.zip dist/SHA256SUMS)
-          args=(--target "$GITHUB_SHA" --title "$TAG")
+          gh release view "$TAG" >/dev/null 2>&1 \
+            || { echo "::error title=release::no Release for $TAG; bump.yml creates it"; exit 1; }
+          gh release upload "$TAG" --clobber "${files[@]}"
+          args=(--draft="$DRAFT")
           [ "$PRERELEASE" = "true" ] && args+=(--prerelease)
-          [ "$DRAFT" = "true" ] && args+=(--draft)
-          if [ -n "${NOTES_FILE:-}" ]; then args+=(--notes-file "$NOTES_FILE")
-          else args+=(--generate-notes); fi
-          gh release create "$TAG" "${args[@]}" "${files[@]}"
+          [ -n "${NOTES_FILE:-}" ] && args+=(--notes-file "$NOTES_FILE")
+          gh release edit "$TAG" "${args[@]}"
       - name: Cancel the run on failure
         if: failure() && inputs.cancel-run-on-failure
         uses: $/.github/actions/cancel-run # nosemgrep: github-actions-mutable-action-tag

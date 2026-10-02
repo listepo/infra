@@ -13,14 +13,14 @@ Shared reusable GitHub workflows and build configs for pyrlyn repositories
 | [`semgrep.yml`](.github/workflows/semgrep.yml) | Semgrep OSS scan, SARIF to code scanning |
 | [`snyk.yml`](.github/workflows/snyk.yml) | Snyk Open Source scan, skipped without `SNYK_TOKEN` |
 | [`pipeline.yml`](.github/workflows/pipeline.yml) | ci-rust + CodeQL + Semgrep + Snyk in parallel behind a `gate` |
-| [`release-plz.yml`](.github/workflows/release-plz.yml) | release PR, then verify + dispatch of the release workflow |
-| [`release.yml`](.github/workflows/release.yml) | manual release: checks, verify, build, sign, smoke, Release, publish |
+| [`release-plz.yml`](.github/workflows/release-plz.yml) | release PR only (versions + changelog); never tags, releases or dispatches |
+| [`release.yml`](.github/workflows/release.yml) | release build on bump's tag: checks, verify, build, sign, smoke, upload, publish |
 | [`dependabot-automerge.yml`](.github/workflows/dependabot-automerge.yml) | merge allowed Dependabot updates after green CI |
 | [`sonarcloud.yml`](.github/workflows/sonarcloud.yml) | SonarCloud scan, skipped without `SONAR_TOKEN` |
 | [`ci.yml`](.github/workflows/ci.yml) | **single entrypoint**: config-driven (`.github/infra.yml`) Rust CI, scans, SonarCloud, lint and repo-specific jobs behind a `gate` |
 | [`sync-docs.yml`](.github/workflows/sync-docs.yml) | publish docs/ to pyrlyn/landing |
 | [`pages.yml`](.github/workflows/pages.yml) | build a static site and deploy it to GitHub Pages |
-| [`bump.yml`](.github/workflows/bump.yml) | verify, then run the release script (bump + dispatch dist) |
+| [`bump.yml`](.github/workflows/bump.yml) | **the only release path**: version commit -> PR -> required checks -> rebase merge -> tag + Release on the landed commit -> dispatch the release build |
 | [`notify-release-failure.yml`](.github/workflows/notify-release-failure.yml) | `release-failure` issue (mention + assign) when a release fails |
 | [`revert-on-failure.yml`](.github/workflows/revert-on-failure.yml) | revert a failed push to the default branch |
 
