@@ -19,6 +19,7 @@ Shared reusable GitHub workflows and build configs for pyrlyn repositories
 | [`sonarcloud.yml`](.github/workflows/sonarcloud.yml) | SonarCloud scan, skipped without `SONAR_TOKEN` |
 | [`ci.yml`](.github/workflows/ci.yml) | **single entrypoint**: config-driven (`.github/infra.yml`) Rust CI, scans, SonarCloud, lint and repo-specific jobs behind a `gate` |
 | [`sync-docs.yml`](.github/workflows/sync-docs.yml) | publish docs/ to pyrlyn/landing |
+| [`license-check.yml`](.github/workflows/license-check.yml) | fail when the caller's LICENSE / commercial license / README license line drift from [`licenses/`](licenses/README.md) |
 | [`pages.yml`](.github/workflows/pages.yml) | build a static site and deploy it to GitHub Pages |
 | [`bump.yml`](.github/workflows/bump.yml) | **the only release path**: version commit -> PR -> required checks -> rebase merge -> tag + Release on the landed commit -> dispatch the release build |
 | [`notify-release-failure.yml`](.github/workflows/notify-release-failure.yml) | `release-failure` issue (mention + assign) when a release fails |
