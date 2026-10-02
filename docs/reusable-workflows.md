@@ -73,6 +73,7 @@ Composite actions (reference them as `pyrlyn/infra/.github/actions/<name>@<sha>`
 | `gate` | fail unless every job in a `needs` JSON succeeded (`skip-ok` lists allowed skips) |
 | `revert-on-failure` | revert a failed push, push the revert, open a draft re-apply PR |
 | `macos-sign` | Developer ID codesign (or identity discovery for cargo-dist) + notarization |
+| `setup-xcode` | select the pinned Xcode (default 27) with `xcode-select`; fails when it is missing |
 | `cancel-run` | cancel the current workflow run (last step, `if: failure()`); `actions: write` |
 | `notify-release-failure` | `release-failure` issue (mention + assign) for a failed release run |
 | `changes` | changed files by ecosystem: `rust`/`swift`/`dotnet`, `*_deps`, `*_full`, `*_present` |
@@ -160,6 +161,7 @@ every job fails if `rustc --version` is not the pinned version.
 | --- | --- | --- |
 | `matrix` | `""` (shared five-target matrix) | JSON `[{"os", "target", "test"?}]` |
 | `rust-version` | `""` | exact toolchain via rustup instead of mise |
+| `xcode-version` | `27` | Xcode selected on macOS jobs (`setup-xcode`); `""` = image default |
 | `working-directory` | `.` | Cargo workspace |
 | `package-args` | `--workspace` | packages for every cargo command (`-p x`; `""` = root only) |
 | `feature-args` | `--all-features` | used by clippy, check, test, doctests, build, MSRV |
@@ -174,6 +176,11 @@ every job fails if `rustc --version` is not the pinned version.
 | `changed-only` | `false` | no work (jobs still pass under their names) when no Rust file changed |
 | `full-package-args` | `--workspace` | replaces `package-args` when a Cargo.toml/Cargo.lock changed |
 | `fmt-runs-on`, `mise-install-args`, `cache-all-refs`, `timeout-minutes` | | |
+
+The shared matrix runs the macOS targets on `xcode-27`, the only GitHub-hosted image with
+Xcode 27, and every macOS job selects Xcode `xcode-version` first (see
+[setup-xcode](#setup-xcode-composite-action)). A `matrix` entry on another macOS runner fails
+there unless it also passes an `xcode-version` that image has (or `""`).
 
 The `plan` job runs the `changes` action. A Cargo.toml or Cargo.lock change (or a run without
 a diff: schedule, workflow_dispatch, a `.github/` or `mise.toml` change) always runs the full
@@ -513,7 +520,9 @@ publish secrets present when asked for) -> `verify` (`verify-command` on `verify
 `build` per `build-matrix` entry (`setup-command`, `build-command`, collect `bins` from
 `bin-dir`, codesign + notarize on macOS when `macos-sign` and the secrets exist, otherwise a
 notice unless `require-macos-sign`, `smoke-command` on native targets, `.tar.gz`/`.zip` +
-`.sha256`) -> `release` (uploads to bump's Release and publishes it; `notes-command` replaces
+`.sha256`; macOS `verify` and `build` jobs first select Xcode `xcode-version`, default `27`,
+through `setup-xcode`, and the default `verify-os`/`build-matrix` use the `xcode-27` image)
+-> `release` (uploads to bump's Release and publishes it; `notes-command` replaces
 bump's notes; prerelease when the tag has a `-` suffix; `draft` keeps it a draft)
 -> `publish` (`publish-crates` with `CARGO_REGISTRY_TOKEN`, and/or `publish-command` with
 `PUBLISH_TOKEN`, archives in `./dist`). `dry-run: true` stops after `build`.
@@ -667,3 +676,36 @@ In a cargo-dist `build-setup.yml`:
     require: "true"
 ```
 
+## setup-xcode (composite action)
+
+Pins the Xcode of macOS jobs for the whole organization: `ci-rust.yml` (`rust` jobs) and
+`release.yml` (`verify`, `build`) call it with their `xcode-version` input (default `27`). It
+selects the newest stable `/Applications/Xcode_<version>*.app` (symlinks resolved; beta and RC
+installs skipped, so `27` picks 27.0 over a 27.2 beta) with `sudo xcode-select -s`, prints
+`xcodebuild -version`, and fails with an `::error::` when the runner has no such Xcode. A
+no-op on non-macOS runners and with `version: ""`.
+
+| Input | Default | Notes |
+| --- | --- | --- |
+| `version` | `27` | major (`27`) or major.minor (`27.1`); `""` keeps the image default |
+
+Outputs: `path` (selected Xcode.app), `version` (e.g. `27.0`).
+
+Xcode 27 ships only on GitHub's `xcode-27` image (`xcode-27`, `xcode-27-xlarge`; preview,
+arm64, announced in actions/runner-images#14404): `macos-latest`/`macos-26` default to Xcode
+26.6 and `macos-15` to 16.4. A repository-specific macOS job:
+
+```yaml
+jobs:
+  macos-app:
+    runs-on: xcode-27
+    steps:
+      - uses: actions/checkout@<sha> # v7.0.1
+      - uses: pyrlyn/infra/.github/actions/setup-xcode@<sha> # main
+        with:
+          version: "27"
+```
+
+A caller whose own workflows use `runs-on: xcode-27` and lint them with actionlint 1.7.12 adds
+the label under `self-hosted-runner.labels` in `.github/actionlint.yaml` (as this repository
+does): that actionlint release predates the image.

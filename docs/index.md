@@ -16,9 +16,13 @@ The shared matrix (default of the `matrix` input):
 | --- | --- | --- |
 | `ubuntu-latest` | `x86_64-unknown-linux-gnu` | run |
 | `ubuntu-24.04-arm` | `aarch64-unknown-linux-gnu` | run |
-| `macos-latest` | `aarch64-apple-darwin` | run |
-| `macos-latest` | `x86_64-apple-darwin` | cross build only |
+| `xcode-27` | `aarch64-apple-darwin` | run |
+| `xcode-27` | `x86_64-apple-darwin` | cross build only |
 | `windows-latest` | `x86_64-pc-windows-msvc` | run |
+
+The macOS entries run on GitHub's `xcode-27` image (macOS with Xcode 27; `macos-latest` and
+`macos-26` carry Xcode 26.x) and select Xcode 27 through the `setup-xcode` action
+(`xcode-version` input, default `27`).
 
 Callers inherit it: no per-repository OS matrix. Because callers pin a commit SHA, a matrix
 change reaches a repository when its pin moves. Pass `matrix` only to drop a target the

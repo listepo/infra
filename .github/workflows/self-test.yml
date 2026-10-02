@@ -6,6 +6,7 @@ name: self-test
 # Semgrep, Snyk) on this repository. The extras run their safe paths: sonarcloud without a
 # token (skips), dependabot-automerge on a non-Dependabot PR (every job skips),
 # revert-on-failure as a dry run of this PR's commits, macos-sign without secrets (skips),
+# setup-xcode (Xcode 27 on xcode-27, a missing version fails, a no-op on Linux),
 # the changes action (table test plus a live run), ci-dotnet.yml without a .NET project (no-op),
 # failure-digest.sh against a fake gh.
 # A change to a reusable workflow or action is exercised before any caller pins it.
@@ -193,11 +194,12 @@ jobs:
 
   macos-sign:
     name: macos-sign (no secrets)
-    runs-on: macos-latest
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: ./.github/actions/setup-xcode
       - run: cp /bin/echo "$RUNNER_TEMP/echo-copy"
       - id: sign
         uses: ./.github/actions/macos-sign
@@ -208,3 +210,40 @@ jobs:
           SIGNED: ${{ steps.sign.outputs.signed }}
         run: '[ "$SIGNED" = "false" ]'
 
+  setup-xcode:
+    name: setup-xcode (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [xcode-27, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: xcode
+        uses: ./.github/actions/setup-xcode
+      - name: Xcode 27 selected (macOS), nothing selected (Linux)
+        env:
+          XCODE_PATH: ${{ steps.xcode.outputs.path }}
+          XCODE_VERSION: ${{ steps.xcode.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = macOS ]; then
+            [[ "$XCODE_VERSION" == 27.* ]] || { echo "selected Xcode '$XCODE_VERSION'" >&2; exit 1; }
+            [ "$(xcode-select -p)" = "$XCODE_PATH/Contents/Developer" ]
+            xcodebuild -version | grep -q '^Xcode 27\.'
+          else
+            [ -z "$XCODE_PATH" ] && [ -z "$XCODE_VERSION" ]
+          fi
+      - id: missing
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        uses: ./.github/actions/setup-xcode
+        with:
+          version: "99"
+      - name: A missing Xcode fails
+        if: runner.os == 'macOS'
+        env:
+          OUTCOME: ${{ steps.missing.outcome }}
+        run: '[ "$OUTCOME" = "failure" ]'

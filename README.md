@@ -28,7 +28,9 @@ Shared reusable GitHub workflows and build configs for pyrlyn repositories
 
 Composite actions: [`gate`](.github/actions/gate/action.yml) (fail unless every needed job
 succeeded), [`revert-on-failure`](.github/actions/revert-on-failure/action.yml),
-[`macos-sign`](.github/actions/macos-sign/action.yml) and
+[`macos-sign`](.github/actions/macos-sign/action.yml),
+[`setup-xcode`](.github/actions/setup-xcode/action.yml) (select the pinned Xcode 27 on macOS
+jobs; ci-rust.yml and release.yml call it) and
 [`cancel-run`](.github/actions/cancel-run/action.yml) (cancel the whole run when a job fails)
 and [`notify-release-failure`](.github/actions/notify-release-failure/action.yml) (open or
 update a `release-failure` issue; release.yml, release-plz.yml and bump.yml run it on failure).
