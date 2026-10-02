@@ -1,0 +1,129 @@
+name: cla
+
+# Contributor License Agreement check with CLA Assistant Lite
+# (contributor-assistant/github-action). Every committer of a pull request must have signed
+# CLA.md of this repository, by commenting the sign phrase on a pull request, or be in the
+# allowlist. Signatures of all pyrlyn repositories are kept in one JSON file in a separate
+# repository (default pyrlyn/cla-signatures, branch main), so one signature covers every
+# repository. Setup, token and required-check instructions: docs/cla.md.
+#
+# Reusable (`workflow_call`) from a thin `.github/workflows/cla.yml` in each calling repository,
+# triggered there on `pull_request_target` and `issue_comment`. Also runs directly on this
+# repository's own pull requests. The workflow never checks out pull request code, which is what
+# keeps `pull_request_target` (secrets available to fork pull requests) safe here.
+#
+# On `issue_comment` (signing, `recheck`) the action re-runs the last failed
+# `pull_request_target` run of the calling workflow, found by workflow *name*: keep the
+# caller's `name: cla` unique in its repository.
+#
+# Secret: CLA_SIGNATURES_TOKEN, a token with contents: write on the signatures repository only.
+# Caller job permissions: actions: write (re-run), contents: read, pull-requests: write
+# (comment, lock), statuses: write.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, closed]
+  issue_comment:
+    types: [created]
+  workflow_call:
+    inputs:
+      document-url:
+        description: URL of the agreement contributors sign.
+        type: string
+        required: false
+        default: https://github.com/pyrlyn/infra/blob/main/CLA.md
+      signatures-organization:
+        description: Owner of the repository that stores the signatures.
+        type: string
+        required: false
+        default: pyrlyn
+      signatures-repository:
+        description: Repository that stores the signatures (not protected on `signatures-branch`).
+        type: string
+        required: false
+        default: cla-signatures
+      signatures-branch:
+        description: Branch of `signatures-repository` the signatures are committed to.
+        type: string
+        required: false
+        default: main
+      signatures-path:
+        description: Path of the signatures JSON file in `signatures-repository`.
+        type: string
+        required: false
+        default: signatures/v1/cla.json
+      allowlist:
+        description: >-
+          Comma-separated GitHub logins that never need to sign (bots, the copyright holder).
+          `*` is a wildcard.
+        type: string
+        required: false
+        default: dependabot[bot],github-actions[bot],renovate[bot],listepo
+      lock-after-merge:
+        description: >-
+          Lock the conversation of a merged pull request so signature comments cannot be edited
+          or deleted afterwards.
+        type: boolean
+        required: false
+        default: true
+    secrets:
+      CLA_SIGNATURES_TOKEN:
+        description: Token with contents read/write on the signatures repository.
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  cla:
+    name: cla
+    # Pull request events, or a comment on a pull request (not an issue) that signs or asks for a
+    # recheck (`contains` is case-insensitive). Dependabot runs get no Actions secrets, and its
+    # commits are in the allowlist anyway, so its pull requests skip the check (a skipped required
+    # check counts as passed).
+    if: >-
+      github.actor != 'dependabot[bot]'
+      && (github.event_name == 'pull_request_target'
+      || (github.event_name == 'issue_comment' && github.event.issue.pull_request
+      && (github.event.comment.body == 'recheck'
+      || contains(github.event.comment.body, 'I hereby sign the CLA'))))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: write
+      statuses: write
+    steps:
+      - name: CLA Assistant Lite
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PERSONAL_ACCESS_TOKEN: ${{ secrets.CLA_SIGNATURES_TOKEN }}
+        with:
+          # On a direct run (this repository's own events) `inputs` is empty: use the defaults.
+          path-to-document: >-
+            ${{ inputs.document-url || 'https://github.com/pyrlyn/infra/blob/main/CLA.md' }}
+          remote-organization-name: ${{ inputs.signatures-organization || 'pyrlyn' }}
+          remote-repository-name: ${{ inputs.signatures-repository || 'cla-signatures' }}
+          branch: ${{ inputs.signatures-branch || 'main' }}
+          path-to-signatures: ${{ inputs.signatures-path || 'signatures/v1/cla.json' }}
+          allowlist: >-
+            ${{ inputs.allowlist
+            || 'dependabot[bot],github-actions[bot],renovate[bot],listepo' }}
+          # format(): on a direct run the input is null, and null == false is true in expressions.
+          lock-pullrequest-aftermerge: >-
+            ${{ format('{0}', inputs.lock-after-merge) == 'false' && 'false' || 'true' }}
+          create-file-commit-message: 'chore(cla): create the signatures file'
+          signed-commit-message: >-
+            chore(cla): $contributorName signed the CLA in
+            $owner/$repo#${{ github.event.pull_request.number || github.event.issue.number }}
+          custom-notsigned-prcomment: >-
+            Thank you for your contribution! Before it can be merged, every committer of this pull
+            request needs to sign our [Contributor License Agreement](${{ inputs.document-url
+            || 'https://github.com/pyrlyn/infra/blob/main/CLA.md' }})
+            ([Russian translation](https://github.com/pyrlyn/infra/blob/main/CLA.ru.md); the
+            English text prevails). You keep the copyright in your work; the agreement lets the
+            maintainer offer the project under the GPL and under its royalty-free and commercial
+            licenses. To sign, post the comment below on this pull request. One signature covers
+            all pyrlyn repositories.
+          custom-allsigned-prcomment: All committers have signed the CLA.
