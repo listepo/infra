@@ -1,7 +1,9 @@
 //! (5) CLA Assistant workflow: valid YAML that references the CLA document (CLA.md).
 //!
-//! The CLA workflow is written on its own pyrlyn/infra branch; on a branch without it this
-//! test skips with a message instead of failing.
+//! The reusable CLA workflow (`.github/workflows/cla.yml`, pyrlyn/infra#21) is written on its
+//! own branch, `docs/cla`. The test reads it from this checkout when present, otherwise from
+//! `origin/docs/cla` (license-tests.yml fetches it), and skips with a message only when
+//! neither has it.
 
 mod common;
 
@@ -12,20 +14,45 @@ use serde_yaml::Value;
 
 const CLA_DOC: &str = "CLA.md";
 
-/// Workflow files of this checkout that use contributor-assistant/github-action.
-fn cla_workflows() -> Vec<(String, String)> {
-    let dir = infra_root().join(".github/workflows");
+const CLA_BRANCH: &str = "origin/docs/cla";
+const CLA_WORKFLOW: &str = ".github/workflows/cla.yml";
+
+fn git_show(rev: &str, path: &str) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(infra_root())
+        .args(["show", &format!("{rev}:{path}")])
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// (where it came from, workflow text, whether CLA.md exists there)
+fn cla_workflows() -> Vec<(String, String, bool)> {
+    let root = infra_root();
+    let dir = root.join(".github/workflows");
     let mut out: Vec<_> = fs::read_dir(dir)
         .unwrap()
         .filter_map(|e| {
             let p = e.ok()?.path();
             let text = fs::read_to_string(&p).ok()?;
             let name = p.file_name()?.to_string_lossy().into_owned();
-            text.contains("contributor-assistant")
-                .then_some((name, text))
+            text.contains("contributor-assistant").then_some((
+                name,
+                text,
+                root.join(CLA_DOC).is_file(),
+            ))
         })
         .collect();
     out.sort();
+    if out.is_empty() {
+        if let Some(text) = git_show(CLA_BRANCH, CLA_WORKFLOW) {
+            let doc = git_show(CLA_BRANCH, CLA_DOC).is_some();
+            out.push((format!("{CLA_BRANCH}:{CLA_WORKFLOW}"), text, doc));
+        }
+    }
     out
 }
 
@@ -51,11 +78,11 @@ fn cla_workflow_is_valid_and_points_at_cla_md() {
     if wfs.is_empty() {
         eprintln!(
             "SKIP cla: no workflow using contributor-assistant/github-action in .github/workflows \
-             on this branch (the CLA workflow lands on its own branch)"
+             and no {CLA_WORKFLOW} on {CLA_BRANCH} (fetch it: git fetch origin docs/cla)"
         );
         return;
     }
-    for (name, text) in wfs {
+    for (name, text, doc_exists) in wfs {
         let doc: Value =
             serde_yaml::from_str(&text).unwrap_or_else(|e| panic!("{name} is not valid YAML: {e}"));
         assert!(doc.get("jobs").is_some(), "{name} has no jobs");
@@ -96,8 +123,8 @@ fn cla_workflow_is_valid_and_points_at_cla_md() {
                 );
             }
             assert!(
-                infra_root().join(CLA_DOC).is_file(),
-                "{name} references {CLA_DOC}, missing in this checkout"
+                doc_exists,
+                "{name} references {CLA_DOC}, which is missing next to it"
             );
         }
     }

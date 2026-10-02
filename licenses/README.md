@@ -62,6 +62,10 @@ a token that can write to the targets, e.g. a fine-grained PAT or GitHub App tok
 repositories; the `GITHUB_TOKEN` cannot write to other repositories, and its pull requests
 would not trigger CI.
 
+`license-kit automerge-decide` is the merge gate for such automation: it answers `merge` only
+for a ready (non-draft) pull request by `dependabot[bot]`, or one labelled `license` on a
+license or CLA branch (`chore/license-*`, `ci/cla`, `docs/cla`), and `refuse` otherwise.
+
 ## Local use
 
 ```sh

@@ -51,8 +51,14 @@ jobs:
         run: cargo fmt --check
       - name: clippy
         run: cargo clippy --locked --all-targets -- -D warnings
+      # tests/cla.rs checks the reusable CLA workflow, written on docs/cla (pyrlyn/infra#21)
+      # until it merges; without that branch the test skips with a message.
+      - name: Fetch the CLA branch
+        run: |
+          git fetch --no-tags --depth 1 origin docs/cla:refs/remotes/origin/docs/cla \
+            || echo "::notice::no docs/cla branch; the CLA config test reads this checkout only"
       - name: Tests
-        run: cargo test --locked --no-fail-fast
+        run: cargo test --locked --no-fail-fast -- --nocapture
       - name: Cancel the run on failure
         if: failure()
         uses: ./.github/actions/cancel-run

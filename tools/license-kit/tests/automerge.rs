@@ -48,6 +48,25 @@ fn merges_license_label_on_license_branches() {
 }
 
 #[test]
+fn merges_license_label_on_cla_branches() {
+    assert!(decide(&pr("listepo", &["license"], "ci/cla", false)).is_merge());
+    assert!(decide(&pr("listepo", &["license"], "docs/cla", false)).is_merge());
+    assert!(decide(&pr("listepo", &["license"], "ci/cla/rtok", false)).is_merge());
+    assert!(
+        !decide(&pr("listepo", &[], "ci/cla", false)).is_merge(),
+        "label required"
+    );
+    assert!(
+        !decide(&pr("listepo", &["license"], "ci/cla", true)).is_merge(),
+        "never a draft"
+    );
+    assert!(
+        !decide(&pr("listepo", &["license"], "ci/claims", false)).is_merge(),
+        "not a prefix"
+    );
+}
+
+#[test]
 fn refuses_drafts_even_when_otherwise_allowed() {
     for p in [
         pr("dependabot[bot]", &[], "dependabot/cargo/x", true),
