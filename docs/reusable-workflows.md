@@ -518,7 +518,7 @@ bump's notes; prerelease when the tag has a `-` suffix; `draft` keeps it a draft
 -> `publish` (`publish-crates` with `CARGO_REGISTRY_TOKEN`, and/or `publish-command` with
 `PUBLISH_TOKEN`, archives in `./dist`). `dry-run: true` stops after `build`.
 
-Repositories built with cargo-dist (rtok, ketch, dunnage, runa) keep dist's generated
+Repositories built with cargo-dist (rtok, ketch, swarfr, runa) keep dist's generated
 `release.yml`: dist regenerates it and fails `dist plan` on a hand-edited copy. Their
 dist-workspace.toml sets `dispatch-releases = true` and `create-release = false`, so the
 workflow bump dispatches uploads to bump's draft Release and undrafts it, and never tags.
@@ -640,7 +640,7 @@ requests").
 
 ## macos-sign (composite action)
 
-Extracted from rtok/dunnage/ketch `build-setup.yml` (identity discovery for cargo-dist) and
+Extracted from rtok/swarfr/ketch `build-setup.yml` (identity discovery for cargo-dist) and
 ketch `build-check.yml` (notarization). A no-op on non-macOS runners. Every credential is
 optional: missing ones skip with a notice unless `require: "true"`.
 
