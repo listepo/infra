@@ -12,7 +12,7 @@ repository. All third-party actions are pinned to full commit SHAs.
 | `lint.yml` | actionlint (+ shellcheck) on the caller's workflows |
 | `codeql.yml` | CodeQL per language, SARIF to code scanning |
 | `semgrep.yml` | Semgrep OSS (`p/default`), SARIF to code scanning |
-| `snyk.yml` | Snyk Open Source; skipped without a token |
+| `snyk.yml` | Snyk Open Source; off by default (switch), skipped without a token |
 | `pipeline.yml` | ci-rust + CodeQL + Semgrep + Snyk in parallel behind a `gate` |
 | `bump.yml` | the only release path: version commit, PR, required checks, rebase merge, tag + Release, release build |
 | `release-plz.yml` | release PR only; never tags, releases or dispatches (bump does) |
@@ -261,6 +261,11 @@ dependency change.
 - semgrep: `config` (`p/default`), `extra-args`, `fail-on-findings` (`false`), `upload`.
 - snyk: `args` (`--all-projects`), `monitor` (`true`), `upload`; secret `SNYK_TOKEN`.
   Snyk CLI does not test Cargo projects; it covers npm, pub, Go, Python, NuGet manifests.
+- Snyk is switched off org-wide (kept, not removed): `snyk.enabled: false` in ci.yml's
+  defaults.yml and `snyk: false` as pipeline.yml's default. The job is then `skipped` and the
+  gate counts it as passed, so Snyk never fails a check, blocks a merge or spends CI minutes.
+  To turn it back on for one repository: `snyk: {enabled: true}` (or `auto`) in its
+  `.github/infra.yml`, or `snyk: true` on a pipeline.yml call; org-wide: flip the default.
 
 ## pipeline.yml
 
@@ -275,7 +280,7 @@ Inputs:
 - `codeql` (true), `codeql-languages`, `codeql-build-mode`, `codeql-build-command`,
   `codeql-queries`, `codeql-config-file`, `codeql-runs-on`.
 - `semgrep` (true), `semgrep-config`, `semgrep-extra-args`, `semgrep-fail-on-findings`.
-- `snyk` (true), `snyk-args`, `snyk-monitor`.
+- `snyk` (false: off org-wide, the gate treats it as passed), `snyk-args`, `snyk-monitor`.
 - `upload-sarif` (true).
 
 Output: `result` (`success`). Draft PRs skip every job, including the gate, so a draft never
