@@ -14,6 +14,10 @@ name: ci-rust
 # toolchain through rustup instead. Either way the pinned version is exported as
 # RUSTUP_TOOLCHAIN and every job fails if `rustc --version` is anything else.
 #
+# macOS jobs select the pinned Xcode (`xcode-version`, default 27) through the setup-xcode
+# action and fail when the runner has none; the shared matrix runs them on `xcode-27`, the
+# GitHub image that ships Xcode 27 (macos-latest / macos-26 carry Xcode 26.x).
+#
 # A failed job cancels the whole run (`cancel-run-on-failure`, on by default).
 #
 # `plan` classifies the changed files (the `changes` action). A change to any Cargo.toml or
@@ -48,6 +52,14 @@ on:
         type: string
         required: false
         default: ""
+      xcode-version:
+        description: >-
+          Xcode that macOS jobs select (.github/actions/setup-xcode): a major ("27") or
+          major.minor ("27.1"); the job fails when the runner has none. Empty keeps the
+          runner image's default Xcode.
+        type: string
+        required: false
+        default: "27"
       fmt-runs-on:
         description: Runner label for the fmt job.
         type: string
@@ -174,8 +186,8 @@ env:
     [
     {"os": "ubuntu-latest", "target": "x86_64-unknown-linux-gnu"},
     {"os": "ubuntu-24.04-arm", "target": "aarch64-unknown-linux-gnu"},
-    {"os": "macos-latest", "target": "aarch64-apple-darwin"},
-    {"os": "macos-latest", "target": "x86_64-apple-darwin"},
+    {"os": "xcode-27", "target": "aarch64-apple-darwin"},
+    {"os": "xcode-27", "target": "x86_64-apple-darwin"},
     {"os": "windows-latest", "target": "x86_64-pc-windows-msvc"}
     ]
 
@@ -295,6 +307,13 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # The pyrlyn Xcode, before anything compiles (cc, linker and SDK come from it).
+      - name: Select Xcode ${{ inputs.xcode-version }}
+        if: env.RUN == 'true' && runner.os == 'macOS' && inputs.xcode-version != ''
+        uses: $/.github/actions/setup-xcode # nosemgrep: github-actions-mutable-action-tag
+        with:
+          version: ${{ inputs.xcode-version }}
 
       # Default path: the Rust version pinned in the caller's mise.toml.
       - if: env.RUN == 'true' && inputs.rust-version == ''

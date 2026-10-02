@@ -8,7 +8,8 @@ name: release
 #   checks  -> the tag exists and names the commit this run is on, required check runs green
 #              on it, publish secrets present
 #   verify  -> `verify-command` on every OS in `verify-os` (same gate as CI)
-#   build   -> `build-command` per {os, target}; macOS codesign + notarization (optional);
+#   build   -> `build-command` per {os, target}, macOS jobs on Xcode `xcode-version` (setup-xcode);
+#              macOS codesign + notarization (optional);
 #              `smoke-command` on targets the runner executes natively; archives + sha256
 #   release -> uploads all archives to bump's Release for the tag and publishes it
 #   publish -> `cargo publish` (publish-crates) and/or a generic `publish-command`
@@ -74,7 +75,15 @@ on:
         description: JSON array of runner labels for verify.
         type: string
         required: false
-        default: '["ubuntu-latest", "macos-latest", "windows-latest"]'
+        default: '["ubuntu-latest", "xcode-27", "windows-latest"]'
+      xcode-version:
+        description: >-
+          Xcode that the macOS verify and build jobs select (.github/actions/setup-xcode): a
+          major ("27") or major.minor ("27.1"); the job fails when the runner has none (Xcode
+          27 is on the `xcode-27` image only). Empty keeps the runner image's default Xcode.
+        type: string
+        required: false
+        default: "27"
       build-matrix:
         description: >-
           JSON array of {"os": <runner>, "target": <triple>} entries to build. Entries with
@@ -85,8 +94,8 @@ on:
           [
           {"os": "ubuntu-latest", "target": "x86_64-unknown-linux-gnu"},
           {"os": "ubuntu-24.04-arm", "target": "aarch64-unknown-linux-gnu"},
-          {"os": "macos-latest", "target": "aarch64-apple-darwin"},
-          {"os": "macos-latest", "target": "x86_64-apple-darwin"},
+          {"os": "xcode-27", "target": "aarch64-apple-darwin"},
+          {"os": "xcode-27", "target": "x86_64-apple-darwin"},
           {"os": "windows-latest", "target": "x86_64-pc-windows-msvc"}
           ]
       working-directory:
@@ -319,6 +328,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Select Xcode ${{ inputs.xcode-version }}
+        if: runner.os == 'macOS' && inputs.xcode-version != ''
+        uses: $/.github/actions/setup-xcode # nosemgrep: github-actions-mutable-action-tag
+        with:
+          version: ${{ inputs.xcode-version }}
       - if: inputs.mise
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
@@ -357,6 +371,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Select Xcode ${{ inputs.xcode-version }}
+        if: runner.os == 'macOS' && inputs.xcode-version != ''
+        uses: $/.github/actions/setup-xcode # nosemgrep: github-actions-mutable-action-tag
+        with:
+          version: ${{ inputs.xcode-version }}
       - if: inputs.mise
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
