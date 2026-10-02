@@ -67,7 +67,7 @@ dotnet:     {enabled: true, dotnet-version: "", working-directory: ".", test-com
 codeql:     {enabled: auto, languages: [actions], build-mode: none, build-command: "",
              queries: security-and-quality, config-file: "", runs-on: ubuntu-latest}
 semgrep:    {enabled: auto, config: p/default, extra-args: "", fail-on-findings: false}
-snyk:       {enabled: auto, args: --all-projects, monitor: true}
+snyk:       {enabled: false, args: --all-projects, monitor: true}  # off org-wide (switch)
 sonarcloud: {enabled: false, organization: "", project-key: "", args: "", project-base-dir: ".",
              mise: true, mise-install-args: "", rust: false, setup-command: "",
              coverage-command: "", soft-fail: true, timeout-minutes: 60}

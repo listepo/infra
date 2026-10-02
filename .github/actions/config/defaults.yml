@@ -68,8 +68,11 @@ semgrep:
   extra-args: ""
   fail-on-findings: false
 
+# Snyk is off org-wide (switch, not removal): `enabled: true` or `auto` in a repository's
+# .github/infra.yml (or config/repos/<repo>.yml) turns it back on. A disabled check is
+# skipped and the gate treats it as passed.
 snyk:
-  enabled: auto
+  enabled: false
   events: []
   args: --all-projects
   monitor: true

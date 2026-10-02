@@ -11,7 +11,7 @@ Shared reusable GitHub workflows and build configs for pyrlyn repositories
 | [`lint.yml`](.github/workflows/lint.yml) | actionlint (+ shellcheck) on the caller's workflows |
 | [`codeql.yml`](.github/workflows/codeql.yml) | CodeQL code scanning per language |
 | [`semgrep.yml`](.github/workflows/semgrep.yml) | Semgrep OSS scan, SARIF to code scanning |
-| [`snyk.yml`](.github/workflows/snyk.yml) | Snyk Open Source scan, skipped without `SNYK_TOKEN` |
+| [`snyk.yml`](.github/workflows/snyk.yml) | Snyk Open Source scan, off by default (switch) |
 | [`pipeline.yml`](.github/workflows/pipeline.yml) | ci-rust + CodeQL + Semgrep + Snyk in parallel behind a `gate` |
 | [`release-plz.yml`](.github/workflows/release-plz.yml) | release PR only (versions + changelog); never tags, releases or dispatches |
 | [`release.yml`](.github/workflows/release.yml) | release build on bump's tag: checks, verify, build, sign, smoke, upload, publish |
