@@ -232,7 +232,10 @@ jobs:
           if [ "$RUNNER_OS" = macOS ]; then
             [[ "$XCODE_VERSION" == 27.* ]] || { echo "selected Xcode '$XCODE_VERSION'" >&2; exit 1; }
             [ "$(xcode-select -p)" = "$XCODE_PATH/Contents/Developer" ]
-            xcodebuild -version | grep -q '^Xcode 27\.'
+            # Captured first: `grep -q` exits on the first match, and xcodebuild aborts on the
+            # broken pipe (SIGABRT, exit 134) under pipefail.
+            version_out="$(xcodebuild -version)"
+            grep -q '^Xcode 27\.' <<<"$version_out"
           else
             [ -z "$XCODE_PATH" ] && [ -z "$XCODE_VERSION" ]
           fi
