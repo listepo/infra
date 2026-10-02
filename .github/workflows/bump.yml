@@ -357,7 +357,9 @@ jobs:
               version="$(cargo metadata --no-deps --format-version 1 | jq -r --arg p "$PACKAGE" \
                 '[.packages[] | select($p == "" or .name == $p)][0].version')"
             fi
-            [ -n "$version" ] && [ "$version" != "null" ] || { echo "::error::no version"; exit 1; }
+            if [ -z "$version" ] || [ "$version" = "null" ]; then
+              echo "::error::no version"; exit 1
+            fi
             tag="$PREFIX$version"
             if [ "$RELEASE_PLZ" = "true" ] && [ -z "$SCRIPT" ] && [ -n "$(git status --porcelain)" ]; then
               git add -A
