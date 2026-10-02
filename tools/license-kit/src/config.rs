@@ -37,9 +37,10 @@ pub struct Config {
 pub struct Target {
     /// `owner/name`.
     pub repo: String,
-    /// Kind -> path in the target repository. Missing kinds use the canonical file name.
+    /// Kind -> path in the target repository; `null` leaves that kind out (e.g. no
+    /// commercial license). Missing kinds use the canonical file name.
     #[serde(default)]
-    pub files: BTreeMap<String, String>,
+    pub files: BTreeMap<String, Option<String>>,
     /// README that gets the license-sync block; `None` (`readme: null`) skips it.
     #[serde(default = "default_readme")]
     pub readme: Option<String>,
@@ -135,11 +136,16 @@ impl Config {
             })
     }
 
-    /// Kind -> path in the target, defaulting to the canonical file name.
+    /// Kind -> path in the target, defaulting to the canonical file name; kinds the target
+    /// maps to `null` are left out.
     pub fn target_files(&self, t: &Target) -> BTreeMap<String, String> {
         self.canonical
             .iter()
-            .map(|(kind, file)| (kind.clone(), t.files.get(kind).unwrap_or(file).clone()))
+            .filter_map(|(kind, file)| match t.files.get(kind) {
+                Some(None) => None,
+                Some(Some(path)) => Some((kind.clone(), path.clone())),
+                None => Some((kind.clone(), file.clone())),
+            })
             .collect()
     }
 }

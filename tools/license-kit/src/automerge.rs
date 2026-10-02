@@ -1,14 +1,14 @@
 //! Whether a pull request may be merged automatically.
 //!
 //! Merge only a ready (non-draft) pull request that is either Dependabot's own or carries the
-//! `license` label on a license or CLA branch (`chore/license-*`, `ci/cla`, `docs/cla`).
-//! Everything else is refused with a reason.
+//! `license` label on a license-sync branch (`chore/license-*`). Everything else is refused
+//! with a reason.
 
 use crate::config::{DEFAULT_BRANCH, DEFAULT_LABEL};
 
 pub const DEPENDABOT: &str = "dependabot[bot]";
-/// Head branch prefixes of license-sync and CLA pull requests.
-pub const LICENSE_PREFIXES: &[&str] = &[DEFAULT_BRANCH, "chore/license-", "ci/cla", "docs/cla"];
+/// Head branch prefixes of license-sync pull requests.
+pub const LICENSE_PREFIXES: &[&str] = &[DEFAULT_BRANCH, "chore/license-"];
 
 #[derive(Debug, Clone, Default)]
 pub struct PrFacts {
@@ -50,10 +50,9 @@ pub fn decide(pr: &PrFacts) -> Decision {
         .any(|p| branch_matches(&pr.head_branch, p));
     match (labelled, license_branch) {
         (true, true) => Decision::Merge(format!("`{DEFAULT_LABEL}` label on {}", pr.head_branch)),
-        (true, false) => Decision::Refuse(format!(
-            "`{}` is not a license or CLA branch",
-            pr.head_branch
-        )),
+        (true, false) => {
+            Decision::Refuse(format!("`{}` is not a license-sync branch", pr.head_branch))
+        }
         (false, true) => Decision::Refuse(format!("no `{DEFAULT_LABEL}` label")),
         (false, false) => Decision::Refuse(format!("author `{}` is not allowed", pr.author)),
     }

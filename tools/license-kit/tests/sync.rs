@@ -24,6 +24,9 @@ const TARGETS: &str = "targets:
   - repo: pyrlyn/automerge
     files: {gpl: COPYING, commercial: docs/COMMERCIAL.md}
     auto-merge: true
+  - repo: pyrlyn/gpl-only
+    files: {gpl: LICENSE, commercial: null}
+    readme: null
 ";
 
 fn repo_files(name: &str) -> BTreeMap<String, String> {
@@ -53,6 +56,10 @@ fn setup() -> (MockGitHub, Config) {
     auto.insert("COPYING".to_owned(), fixture_file("broken/LICENSE"));
     auto.insert("README.md".to_owned(), "# automerge\n".to_owned());
     gh.add_repo("pyrlyn/automerge", Some("GPL-3.0"), auto);
+    let mut only = BTreeMap::new();
+    only.insert("LICENSE".to_owned(), fixture_file("broken/LICENSE"));
+    only.insert("README.md".to_owned(), "# gpl-only\n".to_owned());
+    gh.add_repo("pyrlyn/gpl-only", Some("GPL-3.0"), only);
     (gh, config_with_targets(TARGETS))
 }
 
@@ -256,4 +263,24 @@ fn inventory_lists_untargeted_and_non_gpl_repositories() {
     let get = |r: &str| inv.iter().find(|(n, _, _)| n == r).unwrap();
     assert!(get("pyrlyn/unlisted").1.gpl && !get("pyrlyn/unlisted").2);
     assert!(!get("pyrlyn/mit").1.gpl && get("pyrlyn/mit").2);
+}
+
+#[test]
+fn a_null_kind_and_readme_are_left_out() {
+    let (gh, cfg) = setup();
+    let out = sync::sync_all(&gh, &cfg, &["pyrlyn/gpl-only".into()], "", false).unwrap();
+    let Action::Updated { committed, .. } = action(&out, "pyrlyn/gpl-only") else {
+        panic!("{out:?}")
+    };
+    assert_eq!(
+        committed,
+        &["LICENSE"],
+        "no commercial file, no README block"
+    );
+    let b = "chore/license-sync";
+    assert!(gh.file("pyrlyn/gpl-only", b, "PRICING.md").is_none());
+    assert_eq!(
+        gh.file("pyrlyn/gpl-only", b, "README.md").unwrap(),
+        "# gpl-only\n"
+    );
 }

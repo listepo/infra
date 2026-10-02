@@ -10,7 +10,8 @@ pyrlyn repository:
 | [`readme-snippet.md`](readme-snippet.md) | Line kept in each target README between `<!-- license-sync:start -->` and `<!-- license-sync:end -->`; `{commercial}` becomes the link to that repository's commercial file |
 | [`targets.yml`](targets.yml) | Target repositories and the path of each file there |
 
-Only GPL repositories are targets. `tools/license-kit` decides from the default branch: a
+Only GPL repositories (GPL-3.0-or-later) are targets: cox, rtok, ketch and runa get both
+files and the README line; crates-packages is GPL only (`commercial: null`, `readme: null`). `tools/license-kit` decides from the default branch: a
 license file that reads as the GNU GPL and no root `Cargo.toml` / `package.json` license
 expression without GPL. A repository whose `LICENSE` is GPL but whose manifest says e.g.
 `MIT OR Apache-2.0` is a conflict and is skipped for the maintainer to decide.
@@ -64,7 +65,7 @@ would not trigger CI.
 
 `license-kit automerge-decide` is the merge gate for such automation: it answers `merge` only
 for a ready (non-draft) pull request by `dependabot[bot]`, or one labelled `license` on a
-license or CLA branch (`chore/license-*`, `ci/cla`, `docs/cla`), and `refuse` otherwise.
+license-sync branch (`chore/license-*`), and `refuse` otherwise.
 
 ## Local use
 
