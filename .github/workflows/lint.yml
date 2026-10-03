@@ -34,7 +34,8 @@ on:
         default: ""
 
 # Run directly (this repository's pull_request / workflow_dispatch): only the newest run per
-# ref executes, a new push cancels the older run. Called (workflow_call): the github context,
+# ref executes, a new push cancels the older run, except on the default branch (a merge into
+# main), where each run gets a group of its own. Called (workflow_call): the github context,
 # github.workflow and github.workflow_ref included, is the caller's, so a shared group would
 # let a newer caller run cancel this job inside an older caller run, e.g. two pushes to a
 # consumer's main: the older run's gate then fails on a cancelled lint and revert-on-failure
@@ -44,11 +45,14 @@ concurrency:
   group: >-
     ${{ startsWith(github.workflow_ref,
     format('{0}/.github/workflows/lint.yml@', github.repository))
-    && format('{0}-{1}', github.workflow, github.ref)
+    && format('{0}-{1}', github.workflow,
+    github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    && github.run_id || github.ref)
     || format('lint-call-{0}-{1}', github.run_id, github.run_attempt) }}
   cancel-in-progress: >-
     ${{ startsWith(github.workflow_ref,
-    format('{0}/.github/workflows/lint.yml@', github.repository)) }}
+    format('{0}/.github/workflows/lint.yml@', github.repository))
+    && github.ref != format('refs/heads/{0}', github.event.repository.default_branch) }}
 
 permissions:
   contents: read

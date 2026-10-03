@@ -127,7 +127,9 @@ concurrency:
 - `lint.yml` cancels older runs only when it runs directly in this repository; called, it
   uses a group of its own run and never cancels.
 - This repository's own triggered workflows (`action-pins.yml`, `lint.yml`, `self-test.yml`)
-  use `group: ${{ github.workflow }}-${{ github.ref }}`, `cancel-in-progress: true`.
+  use `group: ${{ github.workflow }}-${{ github.ref }}` and cancel older runs, except on the
+  default branch: a push to main (a merge) gets a group of its own run (`github.run_id`) and
+  `cancel-in-progress: false`, so a newer merge neither cancels nor supersedes it.
 - Release and bump are never cancelled mid-run: bump merges a version commit, then tags it
   and dispatches publishing, and a cancel half-way can leave a merged version with no tag.
   `bump.yml` (`release-${{ github.repository }}`) and `release-plz.yml`
