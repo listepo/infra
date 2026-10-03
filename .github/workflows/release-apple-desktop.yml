@@ -375,8 +375,10 @@ jobs:
           fi
           identity="$(printf '%s\n' "$ids" | sed -nE 's/^ *[0-9]+\) ([0-9A-F]{40}) .*/\1/p')"
           team="$(printf '%s\n' "$ids" | sed -nE 's/.*\(([A-Z0-9]{10})\)"$/\1/p')"
-          [ -n "$identity" ] && [ -n "$team" ] \
-            || { echo "cannot read the identity or team" >&2; exit 1; }
+          if [ -z "$identity" ] || [ -z "$team" ]; then
+            echo "cannot read the identity or team" >&2
+            exit 1
+          fi
           {
             echo "IDENTITY=$identity"
             echo "TEAM_ID=$team"
