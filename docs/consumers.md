@@ -9,6 +9,7 @@ Repositories with Actions enabled that call pyrlyn/infra, and the infra commit t
 | cox | release-plz.yml -> release-plz.yml | `189816a` | `contents: write`, `pull-requests: write`, `actions: write` |
 | ketch | ci.yml `rust` -> ci-rust.yml | `059c0c5` | none on the job (workflow `contents: read`) |
 | ketch | pipeline.yml -> pipeline.yml | `189816a` | `contents: read`, `security-events: write`, `actions: read` |
+| ketch | release-apple-desktop.yml -> release-apple-desktop.yml | ci/release-apple-desktop head (repin to the merge commit) | `contents: write`, `actions: read`, `issues: write` |
 | rtok | pipeline.yml -> pipeline.yml + `gate` action | `189816a` | `contents: read`, `security-events: write`, `actions: read` |
 | rtok | release-plz.yml -> release-plz.yml | `189816a` | `contents: write`, `pull-requests: write`, `actions: write` |
 

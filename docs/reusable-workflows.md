@@ -17,6 +17,7 @@ repository. All third-party actions are pinned to full commit SHAs.
 | `bump.yml` | the only release path: version commit, PR, required checks, rebase merge, tag + Release, release build |
 | `release-plz.yml` | release PR only; never tags, releases or dispatches (bump does) |
 | `release.yml` | release build on bump's tag: checks, verify, build, sign/notarize, smoke, upload, publish |
+| `release-apple-desktop.yml` | macOS app release: signed, notarised `.dmg`, Sparkle appcast, GitHub Release (production only) |
 | `notify-release-failure.yml` | open or update a `release-failure` issue for a failed release |
 | `dependabot-automerge.yml` | merge allowed Dependabot updates after green CI; label/flag others |
 | `sonarcloud.yml` | SonarCloud scan (+ Rust LCOV coverage); skipped without `SONAR_TOKEN` |
@@ -31,6 +32,10 @@ Secrets (declared in each workflow's `on.workflow_call.secrets`):
 - `release.yml`: `MACOS_CERTIFICATE`, `MACOS_CERTIFICATE_PWD`, `APPSTORE_CONNECT_KEY`,
   `APPSTORE_CONNECT_KEY_ID`, `APPSTORE_CONNECT_ISSUER_ID`, `APPLE_ID`, `APPLE_TEAM_ID`,
   `APPLE_APP_PASSWORD`, `CARGO_REGISTRY_TOKEN`, `PUBLISH_TOKEN` (all optional).
+- `release-apple-desktop.yml`: `MACOS_CERTIFICATE`, `MACOS_CERTIFICATE_PWD`,
+  `APPSTORE_CONNECT_KEY`, `APPSTORE_CONNECT_KEY_ID`, `APPSTORE_CONNECT_ISSUER_ID` (or `APPLE_ID`,
+  `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD`), `SPARKLE_ED_PRIVATE_KEY` (with `sparkle`); organization
+  secrets, passed with `secrets: inherit`; a missing one stops the run before the build.
 - `sonarcloud.yml`: `SONAR_TOKEN` (optional; every step skips without it).
 - `dependabot-automerge.yml`: none (uses `github.token`).
 - `cla.yml`: `CLA_SIGNATURES_TOKEN` (contents read/write on `pyrlyn/cla-signatures`).
@@ -45,6 +50,7 @@ Secrets (declared in each workflow's `on.workflow_call.secrets`):
   `issues: write`.
 - `release.yml`: `contents: write` (Release assets), `checks: read`, `actions: write`,
   `issues: write`.
+- `release-apple-desktop.yml`: `contents: write`, `actions: read`, `issues: write`.
 - `bump.yml`: `contents: write`, `pull-requests: write`, `actions: write`, `checks: read`,
   `statuses: read`, `issues: write`.
 - `notify-release-failure.yml`: `actions: read`, `issues: write`.
@@ -537,6 +543,67 @@ workflow bump dispatches uploads to bump's draft Release and undrafts it, and ne
 What stays in each repository: the thin callers above, `.github/dependabot.yml` (GitHub reads
 it only from the repository itself), repository-specific jobs (e.g. rtok's webui/wasm checks,
 plugin-version checks, revert-on-failure), cargo-dist's `release.yml` and `build-setup.yml`.
+
+## release-apple-desktop.yml
+
+Production release of a macOS desktop app; the job ketch's `desktop-release.yml` used to run,
+with the app-specific parts turned into inputs. Never call it for test builds: CI and local
+builds stay unsigned or ad-hoc signed and need none of its secrets. The caller owns a
+dispatch-only trigger (the workflow creates the tag itself, so a tag or release trigger would
+fire on its own output):
+
+```yaml
+name: release-apple-desktop
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: App version to release, X.Y.Z (tagged desktop-vX.Y.Z)
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  release:
+    uses: pyrlyn/infra/.github/workflows/release-apple-desktop.yml@<sha> # main
+    permissions:
+      contents: write
+      actions: read
+      issues: write # notify-failure
+    with:
+      version: ${{ inputs.version }}
+      working-directory: desktop/macos
+      project: Ketch.xcodeproj
+      scheme: Ketch
+      app-name: Ketch
+      export-options: desktop/macos/ExportOptions.plist
+      info-plist: desktop/macos/Ketch/Info.plist
+      minimum-system-version: "26.0"
+      cliff-config: desktop/cliff.toml
+    secrets: inherit
+```
+
+Stages, all in one job on `runs-on` (default `macos-26`; `xcode-version` selects Xcode through
+`setup-xcode`): the version is plain X.Y.Z, untagged and above every earlier `tag-prefix`
+(default `desktop-v`) tag -> every secret present (and the source `SUPublicEDKey` not a
+placeholder) -> `pre-build-command` -> a throwaway keychain with the one Developer ID
+Application identity -> `xcodegen` (`xcodegen-spec`, empty skips) and `xcodebuild archive`
+(`archs`, hardened runtime, `MARKETING_VERSION` = `CURRENT_PROJECT_VERSION` = version) ->
+`-exportArchive` with `export-options`, checking the signature, the hardened runtime, the
+architectures, the version and `minimum-system-version` -> notarise and staple the app, then
+build `<app-name>-X.Y.Z.dmg` (the app and an /Applications link, UDZO), sign, notarise and staple
+it -> `spctl` on both -> `.sha256` -> with `sparkle` (default on): fetch `appcast.xml` from the
+`appcast-tag` prerelease (default `desktop-appcast`), run the resolved Sparkle package's
+`generate_appcast` (`sparkle-bin`) with the key on standard input, and verify the new item's
+EdDSA signature against the exported app's `SUPublicEDKey` -> release notes (`notes-command`,
+or git-cliff with `cliff-config`) -> publish (skipped by `dry-run`): the release under the tag
+with the `.dmg`, its checksum and the appcast, and the appcast on the feed prerelease. Every
+release is created with `--latest=false`, and the run fails (restoring it) if
+`/releases/latest` moved, so a CLI in the same repository keeps its installers' target.
+Notarisation uses the App Store Connect API key, or the Apple ID trio when no key is set.
+
+A single job, so it does not end with `cancel-run`; `notify-failure` opens the
+`release-failure` issue as in release.yml (not for a dry run).
 
 ## dependabot-automerge.yml
 
