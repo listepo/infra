@@ -4,8 +4,11 @@ name: sync-docs
 # rtok, ketch and cox each carried as sync-docs.yml:
 #   - <docs-dir>/site.md (the project card) -> content/projects/<repo name>.md; on a v* tag or
 #     release its `version:` front matter is set from the tag (v1.2.3 -> "1.2.3").
-#   - every other <docs-dir>/**/*.md -> content/docs/<repo name>/ (mirrored, deletions too),
-#     plus _source.json (repo, commit, ref).
+#   - every other user-facing <docs-dir>/**/*.md -> content/docs/<repo name>/ (mirrored,
+#     deletions too), plus _source.json (repo, commit, ref). Internal pages (research, QA audits,
+#     design notes, ADRs, proposals, plans, to-do/done/roadmap notes, agent instructions,
+#     maintainer runbooks, asset notes) are left out by a shared rsync filter plus the caller's
+#     `extra-excludes`; --delete-excluded removes any copy already on the site.
 # Auth: a write-enabled deploy key on the site repository only, passed as SITE_DEPLOY_KEY;
 # GITHUB_TOKEN stays read-only. The caller owns the triggers and the `concurrency` group
 # (`sync-docs`, never cancelled) because a callee group would be keyed on the caller anyway.
@@ -29,6 +32,13 @@ on:
         type: string
         required: false
         default: main
+      extra-excludes:
+        description: >-
+          This repository's own internal pages to leave out, one rsync exclude pattern per line
+          (e.g. compat.md), on top of the shared list.
+        type: string
+        required: false
+        default: ""
     secrets:
       SITE_DEPLOY_KEY:
         description: Private half of a write-enabled deploy key on the site repository.
@@ -83,12 +93,13 @@ jobs:
               open(path, "w", encoding="utf-8").write(text)
           PY
           fi
-      - name: Mirror the other docs/**/*.md into the site repository
+      - name: Mirror the other user-facing docs/**/*.md into the site repository
         env:
           PROJECT: ${{ github.event.repository.name }}
           DOCS_DIR: ${{ inputs.docs-dir }}
           SITE_REPOSITORY: ${{ inputs.site-repository }}
           SITE_BRANCH: ${{ inputs.site-branch }}
+          EXTRA_EXCLUDES: ${{ inputs.extra-excludes }}
           SOURCE: ${{ github.repository }}
           SOURCE_SHA: ${{ github.sha }}
           REF_NAME: ${{ github.ref_name }}
@@ -96,8 +107,27 @@ jobs:
           set -euo pipefail
           dest="site/content/docs/${PROJECT}"
           mkdir -p "$dest"
+          # Only user-facing docs are published. Internal pages stay in the source repository and
+          # are left out here: research, QA audits, design notes and ADRs, proposals, plans and
+          # to-do, done and roadmap notes, agent instructions, maintainer runbooks and asset notes,
+          # plus the caller's extra-excludes. The patterns carry no leading / so they match at any
+          # depth; --delete-excluded removes any copy already on the site.
+          internal=(
+            --exclude='research/' --exclude='research*.md'
+            --exclude='qa/' --exclude='*audit*.md'
+            --exclude='design/' --exclude='brand/' --exclude='assets/' --exclude='adr/' --exclude='notes/'
+            --exclude='proposals/' --exclude='*proposal*.md'
+            --exclude='plan*.md' --exclude='PLAN*.md' --exclude='todo*.md' --exclude='TODO*.md'
+            --exclude='next*.md' --exclude='done*.md' --exclude='roadmap*.md' --exclude='ideas.md'
+            --exclude='AGENTS.md' --exclude='CLAUDE.md' --exclude='agency.md'
+            --exclude='sonarcloud-setup.md' --exclude='release.md' --exclude='release-*.md'
+          )
+          while read -r pattern; do
+            if [ -n "$pattern" ]; then internal+=("--exclude=$pattern"); fi
+          done <<< "$EXTRA_EXCLUDES"
           rsync -a --delete --delete-excluded --prune-empty-dirs \
             --exclude='/site.md' \
+            "${internal[@]}" \
             --include='*/' --include='*.md' --exclude='*' \
             "source/$DOCS_DIR/" "$dest/"
           printf '{\n  "repo": "%s",\n  "sha": "%s",\n  "ref": "%s"\n}\n' \

@@ -7,7 +7,7 @@ Shared reusable GitHub workflows and build configs for pyrlyn repositories
 
 | Workflow | Purpose |
 | --- | --- |
-| [`ci-rust.yml`](.github/workflows/ci-rust.yml) | Rust CI: fmt, clippy, check, tests on a shared five-target matrix, optional MSRV |
+| [`ci-rust.yml`](.github/workflows/ci-rust.yml) | Rust CI: fmt, clippy, check, tests on a shared four-target matrix, optional MSRV |
 | [`lint.yml`](.github/workflows/lint.yml) | actionlint (+ shellcheck) on the caller's workflows |
 | [`codeql.yml`](.github/workflows/codeql.yml) | CodeQL code scanning per language |
 | [`semgrep.yml`](.github/workflows/semgrep.yml) | Semgrep OSS scan, SARIF to code scanning |
@@ -20,6 +20,7 @@ Shared reusable GitHub workflows and build configs for pyrlyn repositories
 | [`ci.yml`](.github/workflows/ci.yml) | **single entrypoint**: config-driven (`.github/infra.yml`) Rust CI, scans, SonarCloud, lint and repo-specific jobs behind a `gate` |
 | [`sync-docs.yml`](.github/workflows/sync-docs.yml) | publish docs/ to pyrlyn/landing |
 | [`license-check.yml`](.github/workflows/license-check.yml) | fail when the caller's LICENSE / commercial license / README license line drift from [`licenses/`](licenses/README.md) |
+| [`license-sync.yml`](.github/workflows/license-sync.yml) | open `chore/license-sync` PRs in the targets when [`licenses/`](licenses/README.md) changes; dry run and a clear error without `LICENSE_SYNC_TOKEN` |
 | [`pages.yml`](.github/workflows/pages.yml) | build a static site and deploy it to GitHub Pages |
 | [`bump.yml`](.github/workflows/bump.yml) | **the only release path**: version commit -> PR -> required checks -> rebase merge -> tag + Release on the landed commit -> dispatch the release build |
 | [`notify-release-failure.yml`](.github/workflows/notify-release-failure.yml) | `release-failure` issue (mention + assign) when a release fails |
@@ -28,7 +29,9 @@ Shared reusable GitHub workflows and build configs for pyrlyn repositories
 
 Composite actions: [`gate`](.github/actions/gate/action.yml) (fail unless every needed job
 succeeded), [`revert-on-failure`](.github/actions/revert-on-failure/action.yml),
-[`macos-sign`](.github/actions/macos-sign/action.yml) and
+[`macos-sign`](.github/actions/macos-sign/action.yml),
+[`setup-xcode`](.github/actions/setup-xcode/action.yml) (select the pinned Xcode 27 on macOS
+jobs; ci-rust.yml and release.yml call it) and
 [`cancel-run`](.github/actions/cancel-run/action.yml) (cancel the whole run when a job fails)
 and [`notify-release-failure`](.github/actions/notify-release-failure/action.yml) (open or
 update a `release-failure` issue; release.yml, release-plz.yml and bump.yml run it on failure).
